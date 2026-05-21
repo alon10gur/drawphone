@@ -24,11 +24,13 @@ function createRoom(hostId, hostName) {
     players: new Map(),
     images: [],
     drawingsByImage: [],
+    strokesByImage: [],
     phase: 'lobby',
     currentRound: 0,
     totalRounds: 0,
     timer: null,
     timeLeft: 0,
+    roundDuration: 90,
     submissionsCount: 0,
     revealImageIndex: 0,
     revealDrawingIndex: 0,
@@ -87,6 +89,15 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('set-timer', (roomCode, duration) => {
+    const room = rooms.get(roomCode);
+    if (!room || room.phase !== 'lobby') return;
+    const host = room.players.get(socket.id);
+    if (!host || !host.isHost) return;
+    room.roundDuration = Math.min(300, Math.max(60, duration));
+    io.to(roomCode).emit('timer-updated', room.roundDuration);
+  });
+
   socket.on('start-game', (roomCode) => {
     const room = rooms.get(roomCode);
     if (!room) return;
@@ -96,6 +107,7 @@ io.on('connection', (socket) => {
     room.phase = 'upload';
     room.images = [];
     room.drawingsByImage = [];
+    room.strokesByImage = [];
     room.currentRound = 0;
     room.totalRounds = room.players.size;
     room.submissionsCount = 0;
@@ -103,6 +115,7 @@ io.on('connection', (socket) => {
     io.to(roomCode).emit('game-started', {
       phase: 'upload',
       playerCount: room.players.size,
+      roundDuration: room.roundDuration,
     });
   });
 
@@ -143,7 +156,7 @@ io.on('connection', (socket) => {
     const images = room.images;
     const shift = room.currentRound + 1;
 
-    room.timeLeft = 90;
+    room.timeLeft = room.roundDuration;
     room.submissionsCount = 0;
 
     players.forEach((player) => {
@@ -152,6 +165,9 @@ io.on('connection', (socket) => {
 
       if (!room.drawingsByImage[imageIndex]) {
         room.drawingsByImage[imageIndex] = [];
+      }
+      if (!room.strokesByImage[imageIndex]) {
+        room.strokesByImage[imageIndex] = [];
       }
     });
 
@@ -174,6 +190,8 @@ io.on('connection', (socket) => {
       round: room.currentRound + 1,
       totalRounds: room.totalRounds,
       timeLeft: room.timeLeft,
+      submissionsCount: 0,
+      totalPlayers: players.length,
     });
 
     room.timer = setInterval(() => {
@@ -188,12 +206,15 @@ io.on('connection', (socket) => {
     }, 1000);
   }
 
-  socket.on('submit-drawing', (roomCode, drawingData, imageIndex) => {
+  socket.on('submit-drawing', (roomCode, drawingData, imageIndex, strokes) => {
     const room = rooms.get(roomCode);
     if (!room || room.phase !== 'drawing') return;
 
     if (!room.drawingsByImage[imageIndex]) {
       room.drawingsByImage[imageIndex] = [];
+    }
+    if (!room.strokesByImage[imageIndex]) {
+      room.strokesByImage[imageIndex] = [];
     }
 
     const existingIdx = room.drawingsByImage[imageIndex].findIndex(
@@ -201,21 +222,48 @@ io.on('connection', (socket) => {
     );
     if (existingIdx >= 0) {
       room.drawingsByImage[imageIndex][existingIdx].data = drawingData;
+      room.strokesByImage[imageIndex][existingIdx].strokes = strokes || [];
     } else {
       room.drawingsByImage[imageIndex].push({
         playerId: socket.id,
         data: drawingData,
       });
+      room.strokesByImage[imageIndex].push({
+        playerId: socket.id,
+        strokes: strokes || [],
+      });
     }
 
     room.submissionsCount++;
-    io.to(roomCode).emit('drawing-submitted', { playerId: socket.id });
+    io.to(roomCode).emit('drawing-submitted', {
+      playerId: socket.id,
+      submissionsCount: room.submissionsCount,
+      totalPlayers: room.players.size,
+    });
 
     if (room.submissionsCount >= room.players.size) {
       if (room.timer) clearInterval(room.timer);
       room.currentRound++;
       startDrawingRound(roomCode);
     }
+  });
+
+  socket.on('submit-stroke', (roomCode, imageIndex, stroke) => {
+    const room = rooms.get(roomCode);
+    if (!room || room.phase !== 'drawing') return;
+
+    if (!room.strokesByImage[imageIndex]) {
+      room.strokesByImage[imageIndex] = [];
+    }
+
+    let playerStrokes = room.strokesByImage[imageIndex].find(
+      (s) => s.playerId === socket.id
+    );
+    if (!playerStrokes) {
+      playerStrokes = { playerId: socket.id, strokes: [] };
+      room.strokesByImage[imageIndex].push(playerStrokes);
+    }
+    playerStrokes.strokes.push(stroke);
   });
 
   socket.on('get-reveal-data', (roomCode, callback) => {
@@ -228,10 +276,12 @@ io.on('connection', (socket) => {
     const revealData = images.map((img, imageIndex) => {
       const originalPlayer = room.players.get(img.playerId);
       const imageDrawings = room.drawingsByImage[imageIndex] || [];
-      const recreations = imageDrawings.map((d) => ({
+      const imageStrokes = room.strokesByImage[imageIndex] || [];
+      const recreations = imageDrawings.map((d, idx) => ({
         playerId: d.playerId,
         playerName: room.players.get(d.playerId)?.name || 'Unknown',
         data: d.data,
+        strokes: imageStrokes[idx]?.strokes || [],
       }));
 
       return {
@@ -251,7 +301,9 @@ io.on('connection', (socket) => {
     const currentImage = room.images[room.revealImageIndex];
     const originalPlayer = room.players.get(currentImage.playerId);
     const imageDrawings = room.drawingsByImage[room.revealImageIndex] || [];
+    const imageStrokes = room.strokesByImage[room.revealImageIndex] || [];
     const revealedDrawings = imageDrawings.slice(0, room.revealDrawingIndex);
+    const revealedStrokes = imageStrokes.slice(0, room.revealDrawingIndex);
     const totalDrawings = imageDrawings.length;
 
     io.to(roomCode).emit('phase-change', { phase: 'reveal' });
@@ -260,7 +312,12 @@ io.on('connection', (socket) => {
       totalImages: room.images.length,
       original: currentImage.data,
       originalPlayer: originalPlayer ? originalPlayer.name : 'Unknown',
-      revealedDrawings,
+      revealedDrawings: revealedDrawings.map((d, idx) => ({
+        playerId: d.playerId,
+        playerName: room.players.get(d.playerId)?.name || 'Unknown',
+        data: d.data,
+        strokes: revealedStrokes[idx]?.strokes || [],
+      })),
       totalDrawings,
       allRevealed: room.revealDrawingIndex >= totalDrawings,
       isLastImage: room.revealImageIndex >= room.images.length - 1,
@@ -300,6 +357,7 @@ io.on('connection', (socket) => {
     room.phase = 'lobby';
     room.images = [];
     room.drawingsByImage = [];
+    room.strokesByImage = [];
     room.currentRound = 0;
     room.submissionsCount = 0;
     room.revealImageIndex = 0;

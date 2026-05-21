@@ -13,6 +13,11 @@ let totalRounds = 0;
 let drawingSubmitted = false;
 let cameraStream = null;
 let currentReferenceImageIndex = 0;
+let currentStrokes = [];
+let shapeStartX = 0;
+let shapeStartY = 0;
+let tempCanvas = null;
+let tempCtx = null;
 
 const screens = {
   lobby: document.getElementById('lobby-screen'),
@@ -29,6 +34,55 @@ ctx.fillStyle = 'white';
 ctx.fillRect(0, 0, canvas.width, canvas.height);
 ctx.lineCap = 'round';
 ctx.lineJoin = 'round';
+
+tempCanvas = document.createElement('canvas');
+tempCanvas.width = canvas.width;
+tempCanvas.height = canvas.height;
+tempCtx = tempCanvas.getContext('2d');
+
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+function playTick() {
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.frequency.value = 800;
+  osc.type = 'sine';
+  gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.05);
+  osc.start(audioCtx.currentTime);
+  osc.stop(audioCtx.currentTime + 0.05);
+}
+
+function playSubmit() {
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.frequency.value = 600;
+  osc.type = 'sine';
+  gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+  osc.start(audioCtx.currentTime);
+  osc.stop(audioCtx.currentTime + 0.15);
+}
+
+function playReveal() {
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.frequency.value = 400;
+  osc.type = 'triangle';
+  gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+  osc.start(audioCtx.currentTime);
+  osc.stop(audioCtx.currentTime + 0.3);
+}
 
 function showScreen(screenName) {
   Object.values(screens).forEach((s) => s.classList.remove('active'));
@@ -82,7 +136,11 @@ document.getElementById('copy-code-btn').addEventListener('click', () => {
 });
 
 document.getElementById('start-game-btn').addEventListener('click', () => {
-  socket.emit('start-game', roomCode);
+  const duration = parseInt(document.getElementById('timer-select').value);
+  socket.emit('set-timer', roomCode, duration);
+  setTimeout(() => {
+    socket.emit('start-game', roomCode);
+  }, 100);
 });
 
 function updateRoomInfo() {
@@ -96,16 +154,27 @@ socket.on('players-update', (players) => {
     .map((p) => `<li class="${p.isHost ? 'host' : ''}">${p.name}</li>`)
     .join('');
 
+  document.getElementById('player-count').textContent = players.length;
+  document.getElementById('player-count-badge').classList.remove('hidden');
+
   const host = players.find((p) => p.isHost && p.id === socket.id);
   if (host) {
     document.getElementById('start-game-btn').classList.remove('hidden');
+    document.getElementById('timer-select').disabled = false;
+  } else {
+    document.getElementById('timer-select').disabled = true;
   }
 });
 
 socket.on('host-changed', (newHostId) => {
   if (newHostId === socket.id) {
     document.getElementById('start-game-btn').classList.remove('hidden');
+    document.getElementById('timer-select').disabled = false;
   }
+});
+
+socket.on('timer-updated', (duration) => {
+  document.getElementById('timer-select').value = duration;
 });
 
 socket.on('game-started', (data) => {
@@ -307,11 +376,13 @@ socket.on('round-start-personal', (data) => {
   totalRounds = data.totalRounds;
   drawingSubmitted = false;
   currentReferenceImageIndex = data.referenceImageIndex;
+  currentStrokes = [];
 
   document.getElementById('round-display').textContent = `Round ${data.round}/${data.totalRounds}`;
   document.getElementById('drawing-player').textContent = `Recreate this image`;
   document.getElementById('reference-image').src = data.referenceImage;
   document.getElementById('timer-display').textContent = data.timeLeft;
+  document.getElementById('submission-counter').textContent = `0/${totalRounds} submitted`;
 
   clearCanvas();
   drawingHistory = [];
@@ -324,6 +395,7 @@ socket.on('round-start-personal', (data) => {
 socket.on('round-info', (data) => {
   document.getElementById('round-display').textContent = `Round ${data.round}/${data.totalRounds}`;
   document.getElementById('timer-display').textContent = data.timeLeft;
+  document.getElementById('submission-counter').textContent = `${data.submissionsCount}/${data.totalPlayers} submitted`;
 });
 
 socket.on('timer-update', (timeLeft) => {
@@ -335,17 +407,22 @@ socket.on('timer-update', (timeLeft) => {
 
   if (timeLeft <= 10) {
     timerContainer.classList.add('danger');
+    playTick();
   } else if (timeLeft <= 30) {
     timerContainer.classList.add('warning');
+    if (timeLeft % 5 === 0) playTick();
   }
 });
 
 socket.on('drawing-submitted', (data) => {
+  document.getElementById('submission-counter').textContent = `${data.submissionsCount}/${data.totalPlayers} submitted`;
+
   if (data.playerId === socket.id) {
     drawingSubmitted = true;
     document.getElementById('submit-drawing-btn').classList.add('hidden');
     showScreen('waiting');
     document.getElementById('waiting-message').textContent = 'Drawing submitted! Waiting for others...';
+    playSubmit();
   }
 });
 
@@ -355,6 +432,7 @@ socket.on('round-ended', () => {
 
 let lastX = 0;
 let lastY = 0;
+let lastStrokeTime = 0;
 
 canvas.addEventListener('mousedown', startDrawing);
 canvas.addEventListener('mousemove', draw);
@@ -376,14 +454,38 @@ canvas.addEventListener('touchstart', (e) => {
     return;
   }
 
+  if (currentTool === 'line' || currentTool === 'rect' || currentTool === 'circle') {
+    shapeStartX = x;
+    shapeStartY = y;
+    tempCtx.drawImage(canvas, 0, 0);
+    isDrawing = true;
+    return;
+  }
+
   lastX = x;
   lastY = y;
   isDrawing = true;
+  lastStrokeTime = Date.now();
 });
 
 canvas.addEventListener('touchmove', (e) => {
   e.preventDefault();
   if (!isDrawing || currentTool === 'fill') return;
+
+  if (currentTool === 'line' || currentTool === 'rect' || currentTool === 'circle') {
+    const touch = e.touches[0];
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = (touch.clientX - rect.left) * scaleX;
+    const y = (touch.clientY - rect.top) * scaleY;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(tempCanvas, 0, 0);
+    drawShape(shapeStartX, shapeStartY, x, y);
+    return;
+  }
+
   const touch = e.touches[0];
   const rect = canvas.getBoundingClientRect();
   const scaleX = canvas.width / rect.width;
@@ -405,7 +507,9 @@ canvas.addEventListener('touchmove', (e) => {
 canvas.addEventListener('touchend', () => {
   if (isDrawing) {
     isDrawing = false;
-    saveCanvasState();
+    if (currentTool === 'pen' || currentTool === 'eraser') {
+      saveCanvasState();
+    }
   }
 });
 
@@ -422,13 +526,35 @@ function startDrawing(e) {
     return;
   }
 
+  if (currentTool === 'line' || currentTool === 'rect' || currentTool === 'circle') {
+    shapeStartX = x;
+    shapeStartY = y;
+    tempCtx.drawImage(canvas, 0, 0);
+    isDrawing = true;
+    return;
+  }
+
   isDrawing = true;
   lastX = x;
   lastY = y;
+  lastStrokeTime = Date.now();
 }
 
 function draw(e) {
   if (!isDrawing || currentTool === 'fill') return;
+
+  if (currentTool === 'line' || currentTool === 'rect' || currentTool === 'circle') {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(tempCanvas, 0, 0);
+    drawShape(shapeStartX, shapeStartY, x, y);
+    return;
+  }
 
   const rect = canvas.getBoundingClientRect();
   const scaleX = canvas.width / rect.width;
@@ -448,10 +574,33 @@ function draw(e) {
 }
 
 function stopDrawing() {
-  if (isDrawing) {
-    isDrawing = false;
+  if (!isDrawing) return;
+  isDrawing = false;
+
+  if (currentTool === 'line' || currentTool === 'rect' || currentTool === 'circle') {
     saveCanvasState();
+    return;
   }
+
+  saveCanvasState();
+}
+
+function drawShape(x1, y1, x2, y2) {
+  ctx.strokeStyle = currentColor;
+  ctx.lineWidth = brushSize;
+  ctx.beginPath();
+
+  if (currentTool === 'line') {
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+  } else if (currentTool === 'rect') {
+    ctx.rect(x1, y1, x2 - x1, y2 - y1);
+  } else if (currentTool === 'circle') {
+    const radius = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+    ctx.arc(x1, y1, radius, 0, Math.PI * 2);
+  }
+
+  ctx.stroke();
 }
 
 function floodFill(startX, startY, fillColor) {
@@ -522,6 +671,9 @@ document.getElementById('pen-btn').addEventListener('click', () => {
   document.getElementById('pen-btn').classList.add('active');
   document.getElementById('eraser-btn').classList.remove('active');
   document.getElementById('fill-btn').classList.remove('active');
+  document.getElementById('line-btn').classList.remove('active');
+  document.getElementById('rect-btn').classList.remove('active');
+  document.getElementById('circle-btn').classList.remove('active');
   canvas.style.cursor = 'crosshair';
 });
 
@@ -530,6 +682,9 @@ document.getElementById('eraser-btn').addEventListener('click', () => {
   document.getElementById('eraser-btn').classList.add('active');
   document.getElementById('pen-btn').classList.remove('active');
   document.getElementById('fill-btn').classList.remove('active');
+  document.getElementById('line-btn').classList.remove('active');
+  document.getElementById('rect-btn').classList.remove('active');
+  document.getElementById('circle-btn').classList.remove('active');
   canvas.style.cursor = 'crosshair';
 });
 
@@ -538,7 +693,43 @@ document.getElementById('fill-btn').addEventListener('click', () => {
   document.getElementById('fill-btn').classList.add('active');
   document.getElementById('pen-btn').classList.remove('active');
   document.getElementById('eraser-btn').classList.remove('active');
+  document.getElementById('line-btn').classList.remove('active');
+  document.getElementById('rect-btn').classList.remove('active');
+  document.getElementById('circle-btn').classList.remove('active');
   canvas.style.cursor = 'cell';
+});
+
+document.getElementById('line-btn').addEventListener('click', () => {
+  currentTool = 'line';
+  document.getElementById('line-btn').classList.add('active');
+  document.getElementById('pen-btn').classList.remove('active');
+  document.getElementById('eraser-btn').classList.remove('active');
+  document.getElementById('fill-btn').classList.remove('active');
+  document.getElementById('rect-btn').classList.remove('active');
+  document.getElementById('circle-btn').classList.remove('active');
+  canvas.style.cursor = 'crosshair';
+});
+
+document.getElementById('rect-btn').addEventListener('click', () => {
+  currentTool = 'rect';
+  document.getElementById('rect-btn').classList.add('active');
+  document.getElementById('pen-btn').classList.remove('active');
+  document.getElementById('eraser-btn').classList.remove('active');
+  document.getElementById('fill-btn').classList.remove('active');
+  document.getElementById('line-btn').classList.remove('active');
+  document.getElementById('circle-btn').classList.remove('active');
+  canvas.style.cursor = 'crosshair';
+});
+
+document.getElementById('circle-btn').addEventListener('click', () => {
+  currentTool = 'circle';
+  document.getElementById('circle-btn').classList.add('active');
+  document.getElementById('pen-btn').classList.remove('active');
+  document.getElementById('eraser-btn').classList.remove('active');
+  document.getElementById('fill-btn').classList.remove('active');
+  document.getElementById('line-btn').classList.remove('active');
+  document.getElementById('rect-btn').classList.remove('active');
+  canvas.style.cursor = 'crosshair';
 });
 
 document.getElementById('color-picker').addEventListener('input', (e) => {
@@ -577,7 +768,7 @@ document.getElementById('undo-btn').addEventListener('click', () => {
 document.getElementById('submit-drawing-btn').addEventListener('click', () => {
   if (!drawingSubmitted) {
     const drawingData = canvas.toDataURL('image/jpeg', 0.8);
-    socket.emit('submit-drawing', roomCode, drawingData, currentReferenceImageIndex);
+    socket.emit('submit-drawing', roomCode, drawingData, currentReferenceImageIndex, []);
   }
 });
 
@@ -611,8 +802,19 @@ socket.on('reveal-state', (data) => {
     card.innerHTML = `
       <h4>${d.playerName}</h4>
       <img src="${d.data}" alt="${d.playerName}'s drawing">
+      ${d.strokes && d.strokes.length > 0 ? '<button class="btn btn-small timelapse-btn" data-player-id="' + d.playerId + '" data-stroke-count="' + d.strokes.length + '">Timelapse</button>' : ''}
     `;
     drawingsContainer.appendChild(card);
+  });
+
+  document.querySelectorAll('.timelapse-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const playerId = btn.dataset.playerId;
+      const drawing = data.revealedDrawings.find((d) => d.playerId === playerId);
+      if (drawing && drawing.strokes.length > 0) {
+        showTimelapse(drawing.strokes, drawing.playerName);
+      }
+    });
   });
 
   nextBtn.classList.add('hidden');
@@ -627,6 +829,8 @@ socket.on('reveal-state', (data) => {
     playAgainBtn.classList.remove('hidden');
     subtitle.textContent = 'All done!';
   }
+
+  playReveal();
 });
 
 socket.on('reveal-complete', () => {
@@ -654,3 +858,80 @@ socket.on('back-to-lobby', () => {
   document.getElementById('room-code').textContent = roomCode;
   resetUpload();
 });
+
+const timelapseModal = document.getElementById('timelapse-modal');
+const timelapseCanvas = document.getElementById('timelapse-canvas');
+const timelapseCtx = timelapseCanvas.getContext('2d');
+const timelapsePlayBtn = document.getElementById('timelapse-play-btn');
+const timelapsePauseBtn = document.getElementById('timelapse-pause-btn');
+const timelapseSpeed = document.getElementById('timelapse-speed');
+const timelapseSpeedDisplay = document.getElementById('timelapse-speed-display');
+const timelapseCloseBtn = document.getElementById('timelapse-close-btn');
+let timelapseInterval = null;
+let timelapseStrokes = [];
+let timelapseIndex = 0;
+
+timelapseSpeed.addEventListener('input', () => {
+  timelapseSpeedDisplay.textContent = timelapseSpeed.value + 'x';
+});
+
+timelapseCloseBtn.addEventListener('click', () => {
+  stopTimelapse();
+  timelapseModal.classList.add('hidden');
+});
+
+timelapsePlayBtn.addEventListener('click', () => {
+  timelapsePlayBtn.classList.add('hidden');
+  timelapsePauseBtn.classList.remove('hidden');
+  playTimelapse();
+});
+
+timelapsePauseBtn.addEventListener('click', () => {
+  stopTimelapse();
+  timelapsePauseBtn.classList.add('hidden');
+  timelapsePlayBtn.classList.remove('hidden');
+});
+
+function showTimelapse(strokes, playerName) {
+  timelapseStrokes = strokes;
+  timelapseIndex = 0;
+  document.getElementById('timelapse-title').textContent = `Timelapse - ${playerName}`;
+  timelapseCtx.fillStyle = 'white';
+  timelapseCtx.fillRect(0, 0, timelapseCanvas.width, timelapseCanvas.height);
+  timelapseModal.classList.remove('hidden');
+  timelapsePlayBtn.classList.remove('hidden');
+  timelapsePauseBtn.classList.add('hidden');
+  stopTimelapse();
+}
+
+function playTimelapse() {
+  stopTimelapse();
+  const speed = parseInt(timelapseSpeed.value);
+  timelapseInterval = setInterval(() => {
+    if (timelapseIndex >= timelapseStrokes.length) {
+      stopTimelapse();
+      timelapsePauseBtn.classList.add('hidden');
+      timelapsePlayBtn.classList.remove('hidden');
+      return;
+    }
+
+    const stroke = timelapseStrokes[timelapseIndex];
+    timelapseCtx.strokeStyle = stroke.color;
+    timelapseCtx.lineWidth = stroke.size;
+    timelapseCtx.lineCap = 'round';
+    timelapseCtx.lineJoin = 'round';
+    timelapseCtx.beginPath();
+    timelapseCtx.moveTo(stroke.x1, stroke.y1);
+    timelapseCtx.lineTo(stroke.x2, stroke.y2);
+    timelapseCtx.stroke();
+
+    timelapseIndex++;
+  }, 100 / speed);
+}
+
+function stopTimelapse() {
+  if (timelapseInterval) {
+    clearInterval(timelapseInterval);
+    timelapseInterval = null;
+  }
+}

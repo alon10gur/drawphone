@@ -11,6 +11,9 @@
     <header>
       <h1>DrawPhone</h1>
       <p class="subtitle">Recreate the image!</p>
+      <div id="player-count-badge" class="player-count-badge hidden">
+        <span id="player-count">0</span> players
+      </div>
     </header>
 
     <main>
@@ -40,6 +43,17 @@
             <div class="players-list">
               <h3>Players</h3>
               <ul id="players-list"></ul>
+            </div>
+            <div class="timer-settings">
+              <label for="timer-select">Round Timer:</label>
+              <select id="timer-select">
+                <option value="60">60 seconds</option>
+                <option value="90" selected>90 seconds</option>
+                <option value="120">120 seconds</option>
+                <option value="180">180 seconds</option>
+                <option value="240">240 seconds</option>
+                <option value="300">300 seconds</option>
+              </select>
             </div>
             <button id="start-game-btn" class="btn btn-primary btn-large hidden">Start Game</button>
           </div>
@@ -100,7 +114,8 @@
         <div class="drawing-header">
           <div class="round-info">
             <span id="round-display">Round 1/4</span>
-            <span id="drawing-player">Drawing for: PlayerName</span>
+            <span id="drawing-player">Recreate this image</span>
+            <span id="submission-counter" class="submission-counter">0/4 submitted</span>
           </div>
           <div class="timer">
             <span id="timer-display">90</span>s
@@ -137,6 +152,24 @@
                     <path d="M19 11l-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11z"/>
                     <path d="M5 21c.6-1.2 1.8-2 3-2 1.6 0 3 1.4 3 3"/>
                     <path d="M19 11l2 2"/>
+                  </svg>
+                </button>
+              </div>
+
+              <div class="tool-group">
+                <button id="line-btn" class="tool-btn" title="Line">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="5" y1="19" x2="19" y2="5"/>
+                  </svg>
+                </button>
+                <button id="rect-btn" class="tool-btn" title="Rectangle">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="4" y="4" width="16" height="16" rx="1"/>
+                  </svg>
+                </button>
+                <button id="circle-btn" class="tool-btn" title="Circle">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="9"/>
                   </svg>
                 </button>
               </div>
@@ -218,6 +251,23 @@
             <button id="reveal-next-btn" class="btn btn-primary hidden">Reveal Next</button>
             <button id="reveal-next-image-btn" class="btn btn-secondary hidden">Next Image</button>
             <button id="play-again-btn" class="btn btn-primary hidden">Play Again</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- TIMELAPSE MODAL -->
+      <div id="timelapse-modal" class="modal hidden">
+        <div class="modal-content timelapse-content">
+          <div class="modal-header">
+            <h3 id="timelapse-title">Timelapse</h3>
+            <button id="timelapse-close-btn" class="modal-close">&times;</button>
+          </div>
+          <canvas id="timelapse-canvas" width="400" height="400"></canvas>
+          <div class="timelapse-controls">
+            <button id="timelapse-play-btn" class="btn btn-primary">Play</button>
+            <button id="timelapse-pause-btn" class="btn btn-secondary hidden">Pause</button>
+            <input type="range" id="timelapse-speed" min="1" max="10" value="5">
+            <span id="timelapse-speed-display">5x</span>
           </div>
         </div>
       </div>

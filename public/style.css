@@ -37,6 +37,7 @@ header {
   padding: 1rem 2rem;
   text-align: center;
   border-bottom: 2px solid var(--primary);
+  position: relative;
 }
 
 header h1 {
@@ -47,6 +48,18 @@ header h1 {
 .subtitle {
   color: var(--text-muted);
   font-size: 0.9rem;
+}
+
+.player-count-badge {
+  position: absolute;
+  top: 0.5rem;
+  right: 1rem;
+  background: var(--primary);
+  color: white;
+  padding: 0.25rem 0.75rem;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  font-weight: 600;
 }
 
 main {
@@ -254,6 +267,35 @@ footer {
   font-size: 0.8rem;
 }
 
+.timer-settings {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background: var(--bg);
+  border-radius: 8px;
+}
+
+.timer-settings label {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.timer-settings select {
+  padding: 0.5rem;
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-light);
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.timer-settings select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Upload */
 .upload-container {
   max-width: 600px;
@@ -403,6 +445,13 @@ footer {
 #drawing-player {
   color: var(--text-muted);
   font-size: 0.9rem;
+}
+
+.submission-counter {
+  color: var(--secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-top: 0.25rem;
 }
 
 .timer {
@@ -659,6 +708,40 @@ footer {
   max-height: 180px;
   border-radius: 6px;
   background: white;
+}
+
+.timelapse-btn {
+  margin-top: 0.5rem;
+  width: 100%;
+}
+
+.timelapse-content {
+  max-width: 500px;
+}
+
+#timelapse-canvas {
+  width: 100%;
+  max-width: 400px;
+  background: white;
+  border-radius: 8px;
+  margin: 1rem 0;
+}
+
+.timelapse-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  justify-content: center;
+  margin-top: 1rem;
+}
+
+.timelapse-controls input[type="range"] {
+  width: 100px;
+}
+
+#timelapse-speed-display {
+  min-width: 30px;
+  text-align: center;
 }
 
 .reveal-progress {
