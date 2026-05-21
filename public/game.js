@@ -1,0 +1,456 @@
+const socket = io();
+
+// State
+let currentScreen = 'lobby-screen';
+let roomCode = null;
+let playerName = '';
+let isDrawing = false;
+let currentTool = 'pen';
+let currentColor = '#000000';
+let brushSize = 3;
+let drawingHistory = [];
+let currentRound = 0;
+let totalRounds = 0;
+let isMyTurn = false;
+let drawingSubmitted = false;
+
+// DOM Elements
+const screens = {
+  lobby: document.getElementById('lobby-screen'),
+  upload: document.getElementById('upload-screen'),
+  drawing: document.getElementById('drawing-screen'),
+  waiting: document.getElementById('waiting-screen'),
+  reveal: document.getElementById('reveal-screen'),
+};
+
+const canvas = document.getElementById('drawing-canvas');
+const ctx = canvas.getContext('2d');
+
+// Initialize canvas
+ctx.fillStyle = 'white';
+ctx.fillRect(0, 0, canvas.width, canvas.height);
+ctx.lineCap = 'round';
+ctx.lineJoin = 'round';
+
+// Screen Management
+function showScreen(screenName) {
+  Object.values(screens).forEach((s) => s.classList.remove('active'));
+  screens[screenName].classList.add('active');
+  currentScreen = screenName;
+}
+
+// Lobby
+document.getElementById('player-name').addEventListener('input', (e) => {
+  playerName = e.target.value.trim();
+});
+
+document.getElementById('create-room-btn').addEventListener('click', () => {
+  if (!playerName) {
+    alert('Please enter your name first!');
+    return;
+  }
+  socket.emit('create-room', playerName, (response) => {
+    if (response.success) {
+      roomCode = response.code;
+      updateRoomInfo();
+    }
+  });
+});
+
+document.getElementById('join-room-btn').addEventListener('click', () => {
+  if (!playerName) {
+    alert('Please enter your name first!');
+    return;
+  }
+  const code = document.getElementById('room-code-input').value.trim().toUpperCase();
+  if (!code) {
+    alert('Please enter a room code!');
+    return;
+  }
+  socket.emit('join-room', code, playerName, (response) => {
+    if (response.success) {
+      roomCode = code;
+      updateRoomInfo();
+    } else {
+      alert(response.error);
+    }
+  });
+});
+
+document.getElementById('copy-code-btn').addEventListener('click', () => {
+  navigator.clipboard.writeText(roomCode).then(() => {
+    const btn = document.getElementById('copy-code-btn');
+    btn.textContent = 'Copied!';
+    setTimeout(() => (btn.textContent = 'Copy'), 2000);
+  });
+});
+
+document.getElementById('start-game-btn').addEventListener('click', () => {
+  socket.emit('start-game', roomCode);
+});
+
+function updateRoomInfo() {
+  document.getElementById('room-info').classList.remove('hidden');
+  document.getElementById('room-code').textContent = roomCode;
+}
+
+// Socket Events
+socket.on('players-update', (players) => {
+  const list = document.getElementById('players-list');
+  list.innerHTML = players
+    .map((p) => `<li class="${p.isHost ? 'host' : ''}">${p.name}</li>`)
+    .join('');
+
+  const host = players.find((p) => p.isHost && p.id === socket.id);
+  if (host) {
+    document.getElementById('start-game-btn').classList.remove('hidden');
+  }
+});
+
+socket.on('host-changed', (newHostId) => {
+  if (newHostId === socket.id) {
+    document.getElementById('start-game-btn').classList.remove('hidden');
+  }
+});
+
+socket.on('game-started', (data) => {
+  showScreen('upload');
+  resetUpload();
+});
+
+// Upload
+function resetUpload() {
+  document.getElementById('upload-preview').classList.add('hidden');
+  document.getElementById('upload-placeholder').classList.remove('hidden');
+  document.getElementById('submit-image-btn').classList.add('hidden');
+  document.getElementById('upload-status').textContent = '';
+  document.getElementById('file-input').value = '';
+}
+
+const uploadArea = document.getElementById('upload-area');
+const fileInput = document.getElementById('file-input');
+const uploadPreview = document.getElementById('upload-preview');
+const uploadPlaceholder = document.getElementById('upload-placeholder');
+
+uploadArea.addEventListener('click', () => fileInput.click());
+
+uploadArea.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  uploadArea.classList.add('dragover');
+});
+
+uploadArea.addEventListener('dragleave', () => {
+  uploadArea.classList.remove('dragover');
+});
+
+uploadArea.addEventListener('drop', (e) => {
+  e.preventDefault();
+  uploadArea.classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file && file.type.startsWith('image/')) {
+    handleFile(file);
+  }
+});
+
+fileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file) handleFile(file);
+});
+
+function handleFile(file) {
+  if (file.size > 5 * 1024 * 1024) {
+    alert('File too large! Max 5MB.');
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = () => {
+      const maxDim = 500;
+      let width = img.width;
+      let height = img.height;
+
+      if (width > maxDim || height > maxDim) {
+        const ratio = Math.min(maxDim / width, maxDim / height);
+        width *= ratio;
+        height *= ratio;
+      }
+
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = width;
+      tempCanvas.height = height;
+      const tempCtx = tempCanvas.getContext('2d');
+      tempCtx.drawImage(img, 0, 0, width, height);
+
+      const dataUrl = tempCanvas.toDataURL('image/jpeg', 0.8);
+      uploadPreview.src = dataUrl;
+      uploadPreview.classList.remove('hidden');
+      uploadPlaceholder.classList.add('hidden');
+      document.getElementById('submit-image-btn').classList.remove('hidden');
+      uploadPreview.dataset.imageData = dataUrl;
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+document.getElementById('submit-image-btn').addEventListener('click', () => {
+  const imageData = uploadPreview.dataset.imageData;
+  if (!imageData) return;
+
+  socket.emit('upload-image', roomCode, imageData);
+  document.getElementById('upload-status').textContent = 'Image submitted! Waiting for others...';
+  document.getElementById('submit-image-btn').disabled = true;
+});
+
+socket.on('upload-confirmed', () => {
+  document.getElementById('upload-status').textContent = 'Image submitted! Waiting for others...';
+});
+
+// Drawing Round
+socket.on('round-start', (data) => {
+  currentRound = data.round;
+  totalRounds = data.totalRounds;
+  isMyTurn = data.drawingPlayer === playerName;
+  drawingSubmitted = false;
+
+  document.getElementById('round-display').textContent = `Round ${data.round}/${data.totalRounds}`;
+  document.getElementById('drawing-player').textContent = `Recreating ${data.drawingPlayer}'s image`;
+  document.getElementById('reference-image').src = data.referenceImage;
+  document.getElementById('timer-display').textContent = data.timeLeft;
+
+  clearCanvas();
+  drawingHistory = [];
+  saveCanvasState();
+
+  if (isMyTurn) {
+    showScreen('drawing');
+    document.getElementById('submit-drawing-btn').classList.remove('hidden');
+    document.getElementById('next-round-btn').classList.add('hidden');
+  } else {
+    showScreen('waiting');
+    document.getElementById('waiting-message').textContent = `${data.drawingPlayer} is drawing...`;
+  }
+});
+
+socket.on('timer-update', (timeLeft) => {
+  const timerEl = document.getElementById('timer-display');
+  timerEl.textContent = timeLeft;
+
+  const timerContainer = timerEl.parentElement;
+  timerContainer.classList.remove('warning', 'danger');
+
+  if (timeLeft <= 10) {
+    timerContainer.classList.add('danger');
+  } else if (timeLeft <= 30) {
+    timerContainer.classList.add('warning');
+  }
+});
+
+socket.on('drawing-submitted', () => {
+  drawingSubmitted = true;
+  document.getElementById('submit-drawing-btn').classList.add('hidden');
+  document.getElementById('next-round-btn').classList.remove('hidden');
+  showScreen('waiting');
+  document.getElementById('waiting-message').textContent = 'Drawing submitted! Waiting for next round...';
+});
+
+// Canvas Drawing
+let lastX = 0;
+let lastY = 0;
+
+canvas.addEventListener('mousedown', startDrawing);
+canvas.addEventListener('mousemove', draw);
+canvas.addEventListener('mouseup', stopDrawing);
+canvas.addEventListener('mouseout', stopDrawing);
+
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  const touch = e.touches[0];
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  lastX = (touch.clientX - rect.left) * scaleX;
+  lastY = (touch.clientY - rect.top) * scaleY;
+  isDrawing = true;
+});
+
+canvas.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+  if (!isDrawing) return;
+  const touch = e.touches[0];
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const x = (touch.clientX - rect.left) * scaleX;
+  const y = (touch.clientY - rect.top) * scaleY;
+
+  ctx.beginPath();
+  ctx.moveTo(lastX, lastY);
+  ctx.lineTo(x, y);
+  ctx.strokeStyle = currentTool === 'eraser' ? '#ffffff' : currentColor;
+  ctx.lineWidth = currentTool === 'eraser' ? brushSize * 2 : brushSize;
+  ctx.stroke();
+
+  lastX = x;
+  lastY = y;
+});
+
+canvas.addEventListener('touchend', () => {
+  isDrawing = false;
+  saveCanvasState();
+});
+
+function startDrawing(e) {
+  isDrawing = true;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  lastX = (e.clientX - rect.left) * scaleX;
+  lastY = (e.clientY - rect.top) * scaleY;
+}
+
+function draw(e) {
+  if (!isDrawing) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const x = (e.clientX - rect.left) * scaleX;
+  const y = (e.clientY - rect.top) * scaleY;
+
+  ctx.beginPath();
+  ctx.moveTo(lastX, lastY);
+  ctx.lineTo(x, y);
+  ctx.strokeStyle = currentTool === 'eraser' ? '#ffffff' : currentColor;
+  ctx.lineWidth = currentTool === 'eraser' ? brushSize * 2 : brushSize;
+  ctx.stroke();
+
+  lastX = x;
+  lastY = y;
+}
+
+function stopDrawing() {
+  if (isDrawing) {
+    isDrawing = false;
+    saveCanvasState();
+  }
+}
+
+function saveCanvasState() {
+  if (drawingHistory.length > 20) {
+    drawingHistory.shift();
+  }
+  drawingHistory.push(canvas.toDataURL());
+}
+
+function clearCanvas() {
+  ctx.fillStyle = 'white';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+document.getElementById('pen-btn').addEventListener('click', () => {
+  currentTool = 'pen';
+  document.getElementById('pen-btn').classList.add('active');
+  document.getElementById('eraser-btn').classList.remove('active');
+});
+
+document.getElementById('eraser-btn').addEventListener('click', () => {
+  currentTool = 'eraser';
+  document.getElementById('eraser-btn').classList.add('active');
+  document.getElementById('pen-btn').classList.remove('active');
+});
+
+document.getElementById('color-picker').addEventListener('input', (e) => {
+  currentColor = e.target.value;
+});
+
+document.querySelectorAll('.color-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    currentColor = btn.dataset.color;
+    document.getElementById('color-picker').value = currentColor;
+  });
+});
+
+document.getElementById('brush-size').addEventListener('input', (e) => {
+  brushSize = parseInt(e.target.value);
+  document.getElementById('brush-size-display').textContent = brushSize;
+});
+
+document.getElementById('clear-btn').addEventListener('click', () => {
+  clearCanvas();
+  saveCanvasState();
+});
+
+document.getElementById('undo-btn').addEventListener('click', () => {
+  if (drawingHistory.length > 1) {
+    drawingHistory.pop();
+    const img = new Image();
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+    };
+    img.src = drawingHistory[drawingHistory.length - 1];
+  }
+});
+
+document.getElementById('submit-drawing-btn').addEventListener('click', () => {
+  if (!drawingSubmitted) {
+    const drawingData = canvas.toDataURL('image/jpeg', 0.8);
+    socket.emit('submit-drawing', roomCode, drawingData);
+  }
+});
+
+document.getElementById('next-round-btn').addEventListener('click', () => {
+  socket.emit('next-round', roomCode);
+});
+
+// Reveal
+socket.on('phase-change', (data) => {
+  if (data.phase === 'reveal') {
+    showScreen('reveal');
+    loadRevealData();
+  }
+});
+
+function loadRevealData() {
+  socket.emit('get-reveal-data', roomCode, (data) => {
+    if (!data) return;
+
+    const gallery = document.getElementById('reveal-gallery');
+    gallery.innerHTML = '';
+
+    data.forEach((item, index) => {
+      const card = document.createElement('div');
+      card.className = 'reveal-card';
+
+      card.innerHTML = `
+        <h3>Round ${index + 1}</h3>
+        <div class="reveal-images">
+          <div class="reveal-image">
+            <h4>Original by ${item.originalPlayer}</h4>
+            <img src="${item.original}" alt="Original">
+          </div>
+          <div class="reveal-image">
+            <h4>${item.recreation ? `Recreation by ${item.drawingPlayer}` : 'No recreation'}</h4>
+            ${item.recreation ? `<img src="${item.recreation}" alt="Recreation">` : '<div class="placeholder">No drawing</div>'}
+          </div>
+        </div>
+      `;
+
+      gallery.appendChild(card);
+    });
+  });
+}
+
+document.getElementById('play-again-btn').addEventListener('click', () => {
+  socket.emit('play-again', roomCode);
+});
+
+socket.on('back-to-lobby', () => {
+  showScreen('lobby');
+  document.getElementById('room-info').classList.remove('hidden');
+  document.getElementById('room-code').textContent = roomCode;
+  resetUpload();
+});
