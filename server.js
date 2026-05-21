@@ -125,6 +125,16 @@ io.on('connection', (socket) => {
     socket.join(info.roomCode);
     room.players.set(socket.id, { id: socket.id, name: info.name, isHost: info.isHost });
     disconnectedPlayers.delete(playerId);
+
+    if (info.isHost) {
+      const players = Array.from(room.players.values());
+      const interimHost = players.find((p) => p.id !== socket.id && p.isHost);
+      if (interimHost) {
+        interimHost.isHost = false;
+      }
+      io.to(info.roomCode).emit('host-changed', socket.id);
+    }
+
     io.to(info.roomCode).emit('players-update', Array.from(room.players.values()), Array.from(room.spectators.values()));
     callback({
       success: true,
@@ -163,7 +173,9 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomCode);
     if (!room) return;
 
-    if (room.phase === 'upload') {
+    if (room.phase === 'lobby') {
+      socket.emit('spectator-phase', { phase: 'lobby', totalPlayers: room.players.size });
+    } else if (room.phase === 'upload') {
       socket.emit('spectator-phase', { phase: 'upload', imagesUploaded: room.images.length, totalPlayers: room.players.size });
     } else if (room.phase === 'drawing') {
       const players = Array.from(room.players.values());
@@ -184,6 +196,7 @@ io.on('connection', (socket) => {
         totalPlayers: room.players.size,
       });
     } else if (room.phase === 'reveal') {
+      socket.emit('phase-change', { phase: 'reveal' });
       sendRevealStateToSocket(roomCode, socket);
     } else if (room.phase === 'voting') {
       socket.emit('phase-change', { phase: 'voting' });
@@ -192,6 +205,21 @@ io.on('connection', (socket) => {
       socket.emit('phase-change', { phase: 'results' });
       socket.emit('results-state', buildResultsState(room));
     }
+  });
+
+  socket.on('spectator-join-game', (roomCode, callback) => {
+    const room = rooms.get(roomCode);
+    if (!room) return callback && callback({ success: false, error: 'Room not found' });
+    if (!room.spectators.has(socket.id)) return callback && callback({ success: false, error: 'Not spectating' });
+    if (room.players.size >= 8) return callback && callback({ success: false, error: 'Room is full' });
+    if (room.phase !== 'lobby') return callback && callback({ success: false, error: 'Game already in progress' });
+
+    const spectator = room.spectators.get(socket.id);
+    room.spectators.delete(socket.id);
+    room.players.set(socket.id, { id: socket.id, name: spectator.name, isHost: false });
+
+    io.to(roomCode).emit('players-update', Array.from(room.players.values()), Array.from(room.spectators.values()));
+    if (callback) callback({ success: true });
   });
 
   socket.on('set-timer', (roomCode, duration) => {
@@ -408,45 +436,7 @@ io.on('connection', (socket) => {
     playerStrokes.strokes.push(stroke);
   });
 
-  socket.on('vote-drawing', (roomCode, imageIndex, drawingPlayerId, points) => {
-    const room = rooms.get(roomCode);
-    if (!room || room.phase !== 'voting') return;
-
-    const voter = room.players.get(socket.id);
-    if (!voter) return;
-
-    const voteKey = `${imageIndex}-${drawingPlayerId}`;
-    if (!room.votes.has(voteKey)) {
-      room.votes.set(voteKey, new Set());
-    }
-    const voters = room.votes.get(voteKey);
-    if (voters.has(socket.id)) return;
-
-    const drawingPlayer = room.players.get(drawingPlayerId);
-    if (!drawingPlayer) return;
-    if (drawingPlayerId === socket.id) return;
-
-    voters.add(socket.id);
-
-    const currentScore = room.scores.get(drawingPlayerId) || 0;
-    room.scores.set(drawingPlayerId, currentScore + points);
-
-    io.to(roomCode).emit('vote-recorded', {
-      imageIndex,
-      drawingPlayerId,
-      voterId: socket.id,
-      points,
-      totalScore: room.scores.get(drawingPlayerId),
-    });
-
-    const allVoted = checkAllVotesDone(room);
-    if (allVoted) {
-      room.phase = 'results';
-      io.to(roomCode).emit('phase-change', { phase: 'results' });
-      io.to(roomCode).emit('results-state', buildResultsState(room));
-    }
-  });
-
+  const emojiRateLimits = new Map();
   socket.on('emoji-reaction', (roomCode, emoji) => {
     const room = rooms.get(roomCode);
     if (!room) return;
@@ -454,6 +444,11 @@ io.on('connection', (socket) => {
 
     const player = room.players.get(socket.id) || room.spectators.get(socket.id);
     if (!player) return;
+
+    const now = Date.now();
+    const lastEmoji = emojiRateLimits.get(socket.id) || 0;
+    if (now - lastEmoji < 1000) return;
+    emojiRateLimits.set(socket.id, now);
 
     const reaction = {
       emoji,
@@ -603,9 +598,11 @@ io.on('connection', (socket) => {
     room.votes = new Map();
     room.emojiReactions = [];
 
-    const votingState = buildVotingState(room);
     io.to(roomCode).emit('phase-change', { phase: 'voting' });
-    io.to(roomCode).emit('voting-state', votingState);
+    const players = Array.from(room.players.values());
+    players.forEach((p) => {
+      io.to(p.id).emit('voting-state', buildVotingState(room, p.id));
+    });
   }
 
   function buildVotingState(room, excludeSocketId = null) {
@@ -666,6 +663,38 @@ io.on('connection', (socket) => {
     };
   }
 
+  socket.on('vote-drawing', (roomCode, imageIndex, drawingPlayerId, points) => {
+    const room = rooms.get(roomCode);
+    if (!room || room.phase !== 'voting') return;
+
+    const voter = room.players.get(socket.id);
+    if (!voter) return;
+    if (drawingPlayerId === socket.id) return;
+
+    const voteKey = `${imageIndex}-${drawingPlayerId}`;
+    if (!room.votes.has(voteKey)) {
+      room.votes.set(voteKey, new Set());
+    }
+    const voters = room.votes.get(voteKey);
+    if (voters.has(socket.id)) return;
+
+    voters.add(socket.id);
+    const currentScore = room.scores.get(drawingPlayerId) || 0;
+    room.scores.set(drawingPlayerId, currentScore + points);
+
+    io.to(roomCode).emit('vote-recorded', {
+      imageIndex,
+      drawingPlayerId,
+      totalScore: currentScore + points,
+    });
+
+    if (checkAllVotesDone(room)) {
+      room.phase = 'results';
+      io.to(roomCode).emit('phase-change', { phase: 'results' });
+      io.to(roomCode).emit('results-state', buildResultsState(room));
+    }
+  });
+
   socket.on('play-again', (roomCode) => {
     const room = rooms.get(roomCode);
     if (!room) return;
@@ -688,28 +717,37 @@ io.on('connection', (socket) => {
     room.players.forEach((p) => room.scores.set(p.id, 0));
 
     io.to(roomCode).emit('back-to-lobby');
+    io.to(roomCode).emit('players-update', Array.from(room.players.values()), Array.from(room.spectators.values()));
   });
 
   socket.on('disconnect', () => {
     console.log('Player disconnected:', socket.id);
 
-    const room = findPlayerRoom(socket.id);
-    if (room) {
-      const player = room.players.get(socket.id);
-      if (player) {
-        disconnectedPlayers.set(socket.id, {
-          name: player.name,
-          isHost: player.isHost,
-          roomCode: room.code,
-          timestamp: Date.now(),
-        });
+    const dpInfo = disconnectedPlayers.get(socket.id);
+    let savedRoomCode = dpInfo ? dpInfo.roomCode : null;
+
+    if (!savedRoomCode) {
+      for (const room of rooms.values()) {
+        if (room.players.has(socket.id)) {
+          const player = room.players.get(socket.id);
+          if (player) {
+            disconnectedPlayers.set(socket.id, {
+              name: player.name,
+              isHost: player.isHost,
+              roomCode: room.code,
+              timestamp: Date.now(),
+            });
+            savedRoomCode = room.code;
+          }
+          break;
+        }
       }
     }
 
     const result = leaveRoom(socket.id);
     if (result.roomDeleted) return;
 
-    const roomCode = result.roomCode;
+    const roomCode = result.roomCode || savedRoomCode;
     if (!roomCode) return;
     const room = rooms.get(roomCode);
     if (!room) return;
@@ -723,7 +761,7 @@ io.on('connection', (socket) => {
       }
     }
 
-    if (room.phase === 'drawing') {
+    if (room.phase === 'drawing' && room.images.length > 0) {
       const shift = room.currentRound + 1;
       const images = room.images;
       const playerImages = [];
@@ -777,13 +815,6 @@ io.on('connection', (socket) => {
     }
   });
 });
-
-function findPlayerRoom(playerId) {
-  for (const room of rooms.values()) {
-    if (room.players.has(playerId)) return room;
-  }
-  return null;
-}
 
 function buildReconnectState(room, playerId) {
   const state = { phase: room.phase };

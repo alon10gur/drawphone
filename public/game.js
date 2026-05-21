@@ -224,6 +224,9 @@ document.getElementById('join-room-btn').addEventListener('click', () => {
       if (isSpectator) {
         showScreen('spectator');
         document.getElementById('spectator-subtitle').textContent = `Game in progress - Phase: ${response.phase}`;
+        if (response.phase === 'lobby') {
+          document.getElementById('spectator-join-btn').classList.remove('hidden');
+        }
         socket.emit('spectator-sync', roomCode);
       }
     } else {
@@ -237,6 +240,19 @@ document.getElementById('copy-code-btn').addEventListener('click', () => {
     const btn = document.getElementById('copy-code-btn');
     btn.textContent = 'Copied!';
     setTimeout(() => (btn.textContent = 'Copy'), 2000);
+  });
+});
+
+document.getElementById('spectator-join-btn').addEventListener('click', () => {
+  if (!roomCode) return;
+  socket.emit('spectator-join-game', roomCode, (response) => {
+    if (response && response.success) {
+      isSpectator = false;
+      showScreen('lobby');
+      document.getElementById('spectator-join-btn').classList.add('hidden');
+    } else if (response) {
+      alert(response.error || 'Could not join game');
+    }
   });
 });
 
@@ -269,6 +285,11 @@ socket.on('players-update', (players, spectators = []) => {
   myPlayerId = socket.id;
   localStorage.setItem('drawphone-player-id', socket.id);
 
+  const isActuallySpectator = !players.some((p) => p.id === socket.id);
+  if (isSpectator !== isActuallySpectator) {
+    isSpectator = isActuallySpectator;
+  }
+
   const list = document.getElementById('players-list');
   list.innerHTML = players
     .map((p) => `<li class="${p.isHost ? 'host' : ''}">${escapeHtml(p.name)}</li>`)
@@ -290,6 +311,13 @@ socket.on('players-update', (players, spectators = []) => {
   if (currentScreen === 'spectator') {
     document.getElementById('spectator-player-count').textContent = `${players.length} players`;
     document.getElementById('spectator-count-badge').textContent = `${spectators.length} watching`;
+    const joinBtn = document.getElementById('spectator-join-btn');
+    const isSpec = spectators.some((s) => s.id === socket.id);
+    if (isSpec && players.length < 8) {
+      joinBtn.classList.remove('hidden');
+    } else {
+      joinBtn.classList.add('hidden');
+    }
   }
 
   if (currentScreen === 'reveal') {
@@ -346,6 +374,7 @@ socket.on('timer-updated', (duration) => {
 socket.on('game-started', (data) => {
   if (isSpectator) {
     showScreen('spectator');
+    document.getElementById('spectator-join-btn').classList.add('hidden');
     document.getElementById('spectator-title').textContent = 'Spectating';
     document.getElementById('spectator-subtitle').textContent = 'Players uploading images...';
     document.getElementById('spectator-stage').classList.add('hidden');
@@ -617,8 +646,15 @@ socket.on('round-ended', () => {
 
 socket.on('spectator-phase', (data) => {
   showScreen('spectator');
+  document.getElementById('spectator-join-btn').classList.add('hidden');
 
-  if (data.phase === 'upload') {
+  if (data.phase === 'lobby') {
+    document.getElementById('spectator-title').textContent = 'Spectating';
+    document.getElementById('spectator-subtitle').textContent = `Waiting for game to start (${data.totalPlayers} players)`;
+    document.getElementById('spectator-stage').classList.add('hidden');
+    document.getElementById('spectator-drawings').innerHTML = '';
+    document.getElementById('spectator-progress-text').textContent = '';
+  } else if (data.phase === 'upload') {
     document.getElementById('spectator-title').textContent = 'Spectating';
     document.getElementById('spectator-subtitle').textContent = `Players uploading images (${data.imagesUploaded}/${data.totalPlayers})`;
     document.getElementById('spectator-stage').classList.add('hidden');
@@ -847,14 +883,14 @@ function stopDrawing(e) {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
-    const x = (lastX * scaleX) / scaleX;
-    const y = (lastY * scaleY) / scaleY;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
 
     currentStrokes.push({
       x1: shapeStartX,
       y1: shapeStartY,
-      x2: lastX,
-      y2: lastY,
+      x2: x,
+      y2: y,
       color: currentColor,
       size: brushSize,
       time: Date.now() - lastStrokeTime,
@@ -1177,7 +1213,15 @@ document.getElementById('results-play-again-btn').addEventListener('click', () =
 });
 
 socket.on('back-to-lobby', () => {
-  isSpectator = false;
+  if (isSpectator) {
+    showScreen('spectator');
+    document.getElementById('spectator-title').textContent = 'Spectating';
+    document.getElementById('spectator-subtitle').textContent = 'Waiting for next game...';
+    document.getElementById('spectator-stage').classList.add('hidden');
+    document.getElementById('spectator-drawings').innerHTML = '';
+    document.getElementById('spectator-progress-text').textContent = '';
+    return;
+  }
   showScreen('lobby');
   document.getElementById('room-info').classList.remove('hidden');
   document.getElementById('room-code').textContent = roomCode;
@@ -1280,7 +1324,7 @@ function spawnEmoji(emoji) {
 }
 
 document.querySelectorAll('.emoji-bar').forEach((emojiBar) => {
-  const emojis = ['', '', '', '', '', '', '', ''];
+  const emojis = ['👍', '😂', '❤️', '🔥', '👏', '😮', '🎨', '💯'];
   emojis.forEach((emoji) => {
     const btn = document.createElement('button');
     btn.className = 'emoji-btn';
@@ -1293,39 +1337,6 @@ document.querySelectorAll('.emoji-bar').forEach((emojiBar) => {
   });
 });
 
-  data.voteItems.forEach((item) => {
-    const key = `${item.imageIndex}-${item.drawingPlayerId}`;
-    const alreadyVoted = votedItems.has(key);
-    const card = document.createElement('div');
-    card.className = 'vote-card';
-    card.dataset.key = key;
-    card.innerHTML = `
-      <div class="vote-card-header">
-        <span class="vote-original-label">Original by ${escapeHtml(item.originalPlayer)}</span>
-      </div>
-      <img src="${item.originalImage}" alt="Original image" class="vote-original-img">
-      <div class="vote-divider"></div>
-      <div class="vote-card_header">
-        <span class="vote-drawer-label">Recreation by ${escapeHtml(item.drawingPlayerName)}</span>
-      </div>
-      <img src="${item.drawing}" alt="${escapeHtml(item.drawingPlayerName)}'s recreation" class="vote-drawing-img">
-      <div class="vote-score">Score: ${data.scores[item.drawingPlayerId] || 0}</div>
-      <button class="btn btn-primary vote-btn" ${alreadyVoted ? 'disabled' : ''} data-key="${key}" data-image-index="${item.imageIndex}" data-drawing-player-id="${item.drawingPlayerId}">
-        ${alreadyVoted ? 'Voted' : 'Vote +1'}
-      </button>
-    `;
-    container.appendChild(card);
-  });
-
-  container.querySelectorAll('.vote-btn:not([disabled])').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const imageIndex = parseInt(btn.dataset.imageIndex);
-      const drawingPlayerId = btn.dataset.drawingPlayerId;
-      socket.emit('vote-drawing', roomCode, imageIndex, drawingPlayerId, 1);
-    });
-  });
-}
-
 function renderResultsUI(data) {
   const container = document.getElementById('results-list');
   container.innerHTML = '';
@@ -1335,7 +1346,7 @@ function renderResultsUI(data) {
     return;
   }
 
-  const medals = ['', '', ''];
+  const medals = ['🥇', '🥈', '🥉'];
   data.rankings.forEach((entry, idx) => {
     const isMe = entry.playerId === socket.id;
     const card = document.createElement('div');
@@ -1351,37 +1362,6 @@ function renderResultsUI(data) {
   if (isHost) {
     document.getElementById('results-play-again-btn').classList.remove('hidden');
   }
-}
-
-function spawnEmoji(emoji, playerName) {
-  const container = document.getElementById('emoji-container');
-  if (!container) return;
-
-  const el = document.createElement('div');
-  el.className = 'emoji-float';
-  el.textContent = emoji;
-  el.style.left = `${20 + Math.random() * 60}%`;
-  el.style.animationDuration = `${2 + Math.random() * 2}s`;
-  container.appendChild(el);
-
-  setTimeout(() => {
-    if (el.parentNode) el.parentNode.removeChild(el);
-  }, 4000);
-}
-
-const emojiBar = document.getElementById('emoji-bar');
-if (emojiBar) {
-  const emojis = ['', '', '', '', '', '', '', ''];
-  emojis.forEach((emoji) => {
-    const btn = document.createElement('button');
-    btn.className = 'emoji-btn';
-    btn.textContent = emoji;
-    btn.setAttribute('aria-label', `Send ${emoji} reaction`);
-    btn.addEventListener('click', () => {
-      socket.emit('emoji-reaction', roomCode, emoji);
-    });
-    emojiBar.appendChild(btn);
-  });
 }
 
 const timelapseModal = document.getElementById('timelapse-modal');

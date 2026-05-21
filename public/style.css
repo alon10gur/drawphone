@@ -805,6 +805,16 @@ footer {
   color: var(--text-muted);
 }
 
+.spectator-actions {
+  display: flex;
+  justify-content: center;
+  margin: 1rem 0;
+}
+
+.spectator-actions .btn {
+  min-width: 180px;
+}
+
 /* Reveal */
 .reveal-container {
   max-width: 900px;
