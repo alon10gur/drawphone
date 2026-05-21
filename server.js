@@ -30,6 +30,8 @@ function createRoom(hostId, hostName) {
     timer: null,
     timeLeft: 0,
     submissionsCount: 0,
+    revealImageIndex: 0,
+    revealDrawingIndex: 0,
   });
   rooms.get(code).players.set(hostId, { id: hostId, name: hostName, isHost: true });
   return code;
@@ -130,7 +132,9 @@ io.on('connection', (socket) => {
 
     if (room.currentRound >= room.totalRounds) {
       room.phase = 'reveal';
-      io.to(roomCode).emit('phase-change', { phase: 'reveal' });
+      room.revealImageIndex = 0;
+      room.revealDrawingIndex = 0;
+      sendRevealState(roomCode);
       return;
     }
 
@@ -147,7 +151,7 @@ io.on('connection', (socket) => {
       const imageIndex = (playerIndex + shift) % images.length;
       const referenceImage = images[imageIndex];
 
-      socket.to(roomCode).emit('round-start-personal', {
+      io.to(player.id).emit('round-start-personal', {
         round: room.currentRound + 1,
         totalRounds: room.totalRounds,
         referenceImage: referenceImage.data,
@@ -241,6 +245,54 @@ io.on('connection', (socket) => {
     callback(revealData);
   });
 
+  function sendRevealState(roomCode) {
+    const room = rooms.get(roomCode);
+    if (!room) return;
+
+    const currentImage = room.images[room.revealImageIndex];
+    const originalPlayer = room.players.get(currentImage.playerId);
+    const roundDrawings = room.drawings[room.revealImageIndex] || [];
+    const revealedDrawings = roundDrawings.slice(0, room.revealDrawingIndex);
+    const totalDrawings = roundDrawings.length;
+
+    io.to(roomCode).emit('reveal-state', {
+      currentImageIndex: room.revealImageIndex,
+      totalImages: room.images.length,
+      original: currentImage.data,
+      originalPlayer: originalPlayer ? originalPlayer.name : 'Unknown',
+      revealedDrawings,
+      totalDrawings,
+      allRevealed: room.revealDrawingIndex >= totalDrawings,
+      isLastImage: room.revealImageIndex >= room.images.length - 1,
+    });
+  }
+
+  socket.on('reveal-next-drawing', (roomCode) => {
+    const room = rooms.get(roomCode);
+    if (!room || room.phase !== 'reveal') return;
+    const host = room.players.get(socket.id);
+    if (!host || !host.isHost) return;
+
+    room.revealDrawingIndex++;
+    sendRevealState(roomCode);
+  });
+
+  socket.on('reveal-next-image', (roomCode) => {
+    const room = rooms.get(roomCode);
+    if (!room || room.phase !== 'reveal') return;
+    const host = room.players.get(socket.id);
+    if (!host || !host.isHost) return;
+
+    room.revealImageIndex++;
+    room.revealDrawingIndex = 0;
+
+    if (room.revealImageIndex >= room.images.length) {
+      io.to(roomCode).emit('reveal-complete');
+    } else {
+      sendRevealState(roomCode);
+    }
+  });
+
   socket.on('play-again', (roomCode) => {
     const room = rooms.get(roomCode);
     if (!room) return;
@@ -250,6 +302,8 @@ io.on('connection', (socket) => {
     room.drawings = [];
     room.currentRound = 0;
     room.submissionsCount = 0;
+    room.revealImageIndex = 0;
+    room.revealDrawingIndex = 0;
     if (room.timer) clearInterval(room.timer);
 
     io.to(roomCode).emit('back-to-lobby');

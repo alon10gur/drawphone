@@ -201,11 +201,24 @@
       <!-- REVEAL SCREEN -->
       <div id="reveal-screen" class="screen">
         <div class="reveal-container">
-          <h2>Results!</h2>
-          <p>See how everyone recreated the images</p>
-          <div id="reveal-gallery" class="reveal-gallery"></div>
-          <div class="reveal-actions">
-            <button id="play-again-btn" class="btn btn-primary">Play Again</button>
+          <div class="reveal-header">
+            <h2 id="reveal-title">Results!</h2>
+            <p id="reveal-subtitle">Watch the drawings unfold</p>
+          </div>
+          <div id="reveal-stage" class="reveal-stage">
+            <div class="reveal-original">
+              <h3>Original</h3>
+              <img id="reveal-original-img" src="" alt="Original">
+            </div>
+            <div id="reveal-drawings" class="reveal-drawings"></div>
+          </div>
+          <div class="reveal-progress">
+            <span id="reveal-progress-text">Image 1/4</span>
+          </div>
+          <div class="reveal-actions" id="reveal-actions">
+            <button id="reveal-next-btn" class="btn btn-primary hidden">Reveal Next</button>
+            <button id="reveal-next-image-btn" class="btn btn-secondary hidden">Next Image</button>
+            <button id="play-again-btn" class="btn btn-primary hidden">Play Again</button>
           </div>
         </div>
       </div>

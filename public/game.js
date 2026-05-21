@@ -581,52 +581,63 @@ document.getElementById('next-round-btn').addEventListener('click', () => {
 socket.on('phase-change', (data) => {
   if (data.phase === 'reveal') {
     showScreen('reveal');
-    loadRevealData();
   }
 });
 
-function loadRevealData() {
-  socket.emit('get-reveal-data', roomCode, (data) => {
-    if (!data) return;
+socket.on('reveal-state', (data) => {
+  const title = document.getElementById('reveal-title');
+  const subtitle = document.getElementById('reveal-subtitle');
+  const originalImg = document.getElementById('reveal-original-img');
+  const drawingsContainer = document.getElementById('reveal-drawings');
+  const progressText = document.getElementById('reveal-progress-text');
+  const nextBtn = document.getElementById('reveal-next-btn');
+  const nextImageBtn = document.getElementById('reveal-next-image-btn');
+  const playAgainBtn = document.getElementById('play-again-btn');
 
-    const gallery = document.getElementById('reveal-gallery');
-    gallery.innerHTML = '';
+  title.textContent = `Image ${data.currentImageIndex + 1}/${data.totalImages}`;
+  subtitle.textContent = data.allRevealed ? 'All drawings revealed!' : 'Click to reveal the next drawing';
+  originalImg.src = data.original;
+  progressText.textContent = `Image ${data.currentImageIndex + 1} of ${data.totalImages}`;
 
-    data.forEach((item, index) => {
-      const card = document.createElement('div');
-      card.className = 'reveal-card';
-
-      let recreationsHtml = '';
-      if (item.recreations && item.recreations.length > 0) {
-        recreationsHtml = item.recreations
-          .map(
-            (r) => `
-          <div class="reveal-image">
-            <h4>By ${r.playerName}</h4>
-            <img src="${r.data}" alt="Recreation">
-          </div>
-        `
-          )
-          .join('');
-      } else {
-        recreationsHtml = '<div class="reveal-image"><div class="placeholder">No recreations</div></div>';
-      }
-
-      card.innerHTML = `
-        <h3>Round ${index + 1}</h3>
-        <div class="reveal-images">
-          <div class="reveal-image">
-            <h4>Original</h4>
-            <img src="${item.original}" alt="Original">
-          </div>
-          ${recreationsHtml}
-        </div>
-      `;
-
-      gallery.appendChild(card);
-    });
+  drawingsContainer.innerHTML = '';
+  data.revealedDrawings.forEach((d) => {
+    const card = document.createElement('div');
+    card.className = 'reveal-drawing-card';
+    card.innerHTML = `
+      <h4>${d.playerName}</h4>
+      <img src="${d.data}" alt="${d.playerName}'s drawing">
+    `;
+    drawingsContainer.appendChild(card);
   });
-}
+
+  nextBtn.classList.add('hidden');
+  nextImageBtn.classList.add('hidden');
+  playAgainBtn.classList.add('hidden');
+
+  if (!data.allRevealed) {
+    nextBtn.classList.remove('hidden');
+  } else if (!data.isLastImage) {
+    nextImageBtn.classList.remove('hidden');
+  } else {
+    playAgainBtn.classList.remove('hidden');
+    subtitle.textContent = 'All done!';
+  }
+});
+
+socket.on('reveal-complete', () => {
+  const subtitle = document.getElementById('reveal-subtitle');
+  const playAgainBtn = document.getElementById('play-again-btn');
+  subtitle.textContent = 'All images revealed!';
+  playAgainBtn.classList.remove('hidden');
+});
+
+document.getElementById('reveal-next-btn').addEventListener('click', () => {
+  socket.emit('reveal-next-drawing', roomCode);
+});
+
+document.getElementById('reveal-next-image-btn').addEventListener('click', () => {
+  socket.emit('reveal-next-image', roomCode);
+});
 
 document.getElementById('play-again-btn').addEventListener('click', () => {
   socket.emit('play-again', roomCode);
