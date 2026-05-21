@@ -681,16 +681,4 @@ footer {
   .reference-panel {
     flex: none;
   }
-
-  .reveal-gallery {
-    grid-template-columns: 1fr;
-  }
-
-  .reveal-images {
-    flex-direction: column;
-  }
-
-  .reveal-image {
-    max-width: 100%;
-  }
 }

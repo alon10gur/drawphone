@@ -12,6 +12,7 @@ let currentRound = 0;
 let totalRounds = 0;
 let drawingSubmitted = false;
 let cameraStream = null;
+let currentReferenceImageIndex = 0;
 
 const screens = {
   lobby: document.getElementById('lobby-screen'),
@@ -305,6 +306,7 @@ socket.on('round-start-personal', (data) => {
   currentRound = data.round;
   totalRounds = data.totalRounds;
   drawingSubmitted = false;
+  currentReferenceImageIndex = data.referenceImageIndex;
 
   document.getElementById('round-display').textContent = `Round ${data.round}/${data.totalRounds}`;
   document.getElementById('drawing-player').textContent = `Recreate this image`;
@@ -317,7 +319,6 @@ socket.on('round-start-personal', (data) => {
 
   showScreen('drawing');
   document.getElementById('submit-drawing-btn').classList.remove('hidden');
-  document.getElementById('next-round-btn').classList.add('hidden');
 });
 
 socket.on('round-info', (data) => {
@@ -343,9 +344,9 @@ socket.on('drawing-submitted', (data) => {
   if (data.playerId === socket.id) {
     drawingSubmitted = true;
     document.getElementById('submit-drawing-btn').classList.add('hidden');
+    showScreen('waiting');
+    document.getElementById('waiting-message').textContent = 'Drawing submitted! Waiting for others...';
   }
-  showScreen('waiting');
-  document.getElementById('waiting-message').textContent = 'Waiting for others...';
 });
 
 socket.on('round-ended', () => {
@@ -576,12 +577,8 @@ document.getElementById('undo-btn').addEventListener('click', () => {
 document.getElementById('submit-drawing-btn').addEventListener('click', () => {
   if (!drawingSubmitted) {
     const drawingData = canvas.toDataURL('image/jpeg', 0.8);
-    socket.emit('submit-drawing', roomCode, drawingData);
+    socket.emit('submit-drawing', roomCode, drawingData, currentReferenceImageIndex);
   }
-});
-
-document.getElementById('next-round-btn').addEventListener('click', () => {
-  socket.emit('next-round', roomCode);
 });
 
 socket.on('phase-change', (data) => {

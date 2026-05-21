@@ -23,7 +23,7 @@ function createRoom(hostId, hostName) {
     code,
     players: new Map(),
     images: [],
-    drawings: [],
+    drawingsByImage: [],
     phase: 'lobby',
     currentRound: 0,
     totalRounds: 0,
@@ -95,7 +95,7 @@ io.on('connection', (socket) => {
 
     room.phase = 'upload';
     room.images = [];
-    room.drawings = [];
+    room.drawingsByImage = [];
     room.currentRound = 0;
     room.totalRounds = room.players.size;
     room.submissionsCount = 0;
@@ -145,7 +145,15 @@ io.on('connection', (socket) => {
 
     room.timeLeft = 90;
     room.submissionsCount = 0;
-    room.drawings[room.currentRound] = [];
+
+    players.forEach((player) => {
+      const playerIndex = players.indexOf(player);
+      const imageIndex = (playerIndex + shift) % images.length;
+
+      if (!room.drawingsByImage[imageIndex]) {
+        room.drawingsByImage[imageIndex] = [];
+      }
+    });
 
     players.forEach((player) => {
       const playerIndex = players.indexOf(player);
@@ -157,6 +165,7 @@ io.on('connection', (socket) => {
         totalRounds: room.totalRounds,
         referenceImage: referenceImage.data,
         referencePlayerId: referenceImage.playerId,
+        referenceImageIndex: imageIndex,
         timeLeft: room.timeLeft,
       });
     });
@@ -179,21 +188,21 @@ io.on('connection', (socket) => {
     }, 1000);
   }
 
-  socket.on('submit-drawing', (roomCode, drawingData) => {
+  socket.on('submit-drawing', (roomCode, drawingData, imageIndex) => {
     const room = rooms.get(roomCode);
     if (!room || room.phase !== 'drawing') return;
 
-    if (!room.drawings[room.currentRound]) {
-      room.drawings[room.currentRound] = [];
+    if (!room.drawingsByImage[imageIndex]) {
+      room.drawingsByImage[imageIndex] = [];
     }
 
-    const existingIdx = room.drawings[room.currentRound].findIndex(
+    const existingIdx = room.drawingsByImage[imageIndex].findIndex(
       (d) => d.playerId === socket.id
     );
     if (existingIdx >= 0) {
-      room.drawings[room.currentRound][existingIdx].data = drawingData;
+      room.drawingsByImage[imageIndex][existingIdx].data = drawingData;
     } else {
-      room.drawings[room.currentRound].push({
+      room.drawingsByImage[imageIndex].push({
         playerId: socket.id,
         data: drawingData,
       });
@@ -209,17 +218,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('next-round', (roomCode) => {
-    const room = rooms.get(roomCode);
-    if (!room || room.phase !== 'drawing') return;
-    const host = room.players.get(socket.id);
-    if (!host || !host.isHost) return;
-
-    if (room.timer) clearInterval(room.timer);
-    room.currentRound++;
-    startDrawingRound(roomCode);
-  });
-
   socket.on('get-reveal-data', (roomCode, callback) => {
     const room = rooms.get(roomCode);
     if (!room) return callback(null);
@@ -229,8 +227,8 @@ io.on('connection', (socket) => {
 
     const revealData = images.map((img, imageIndex) => {
       const originalPlayer = room.players.get(img.playerId);
-      const roundDrawings = room.drawings[imageIndex] || [];
-      const recreations = roundDrawings.map((d) => ({
+      const imageDrawings = room.drawingsByImage[imageIndex] || [];
+      const recreations = imageDrawings.map((d) => ({
         playerId: d.playerId,
         playerName: room.players.get(d.playerId)?.name || 'Unknown',
         data: d.data,
@@ -252,9 +250,9 @@ io.on('connection', (socket) => {
 
     const currentImage = room.images[room.revealImageIndex];
     const originalPlayer = room.players.get(currentImage.playerId);
-    const roundDrawings = room.drawings[room.revealImageIndex] || [];
-    const revealedDrawings = roundDrawings.slice(0, room.revealDrawingIndex);
-    const totalDrawings = roundDrawings.length;
+    const imageDrawings = room.drawingsByImage[room.revealImageIndex] || [];
+    const revealedDrawings = imageDrawings.slice(0, room.revealDrawingIndex);
+    const totalDrawings = imageDrawings.length;
 
     io.to(roomCode).emit('phase-change', { phase: 'reveal' });
     io.to(roomCode).emit('reveal-state', {
@@ -301,7 +299,7 @@ io.on('connection', (socket) => {
 
     room.phase = 'lobby';
     room.images = [];
-    room.drawings = [];
+    room.drawingsByImage = [];
     room.currentRound = 0;
     room.submissionsCount = 0;
     room.revealImageIndex = 0;
