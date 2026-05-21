@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DrawPhone - Recreate the Image!</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>DrawPhone</h1>
+      <p class="subtitle">Recreate the image!</p>
+    </header>
+
+    <main>
+      <!-- LOBBY SCREEN -->
+      <div id="lobby-screen" class="screen active">
+        <div class="lobby-container">
+          <div class="name-input-section">
+            <label for="player-name">Your Name</label>
+            <input type="text" id="player-name" placeholder="Enter your name..." maxlength="20">
+          </div>
+
+          <div class="room-actions">
+            <button id="create-room-btn" class="btn btn-primary">Create Room</button>
+            <div class="divider"><span>OR</span></div>
+            <div class="join-section">
+              <input type="text" id="room-code-input" placeholder="Room Code" maxlength="6">
+              <button id="join-room-btn" class="btn btn-secondary">Join Room</button>
+            </div>
+          </div>
+
+          <div id="room-info" class="hidden">
+            <div class="room-code-display">
+              <span>Room Code:</span>
+              <span id="room-code" class="code"></span>
+              <button id="copy-code-btn" class="btn btn-small">Copy</button>
+            </div>
+            <div class="players-list">
+              <h3>Players</h3>
+              <ul id="players-list"></ul>
+            </div>
+            <button id="start-game-btn" class="btn btn-primary btn-large hidden">Start Game</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- UPLOAD SCREEN -->
+      <div id="upload-screen" class="screen">
+        <div class="upload-container">
+          <h2>Upload an Image</h2>
+          <p>Choose an image for others to recreate!</p>
+          <div class="upload-area" id="upload-area">
+            <input type="file" id="file-input" accept="image/*" hidden>
+            <div class="upload-placeholder" id="upload-placeholder">
+              <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                <circle cx="8.5" cy="8.5" r="1.5"/>
+                <polyline points="21 15 16 10 5 21"/>
+              </svg>
+              <p>Click or drag an image here</p>
+              <span class="upload-hint">JPG, PNG, GIF (max 5MB)</span>
+            </div>
+            <img id="upload-preview" class="hidden" alt="Preview">
+          </div>
+          <div class="upload-options">
+            <button id="camera-btn" class="btn btn-secondary">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                <circle cx="12" cy="13" r="4"/>
+              </svg>
+              Take Photo
+            </button>
+          </div>
+          <button id="submit-image-btn" class="btn btn-primary hidden">Submit Image</button>
+          <p id="upload-status" class="status-text"></p>
+        </div>
+      </div>
+
+      <!-- CAMERA MODAL -->
+      <div id="camera-modal" class="modal hidden">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>Take a Photo</h3>
+            <button id="camera-close-btn" class="modal-close">&times;</button>
+          </div>
+          <video id="camera-video" autoplay playsinline></video>
+          <canvas id="camera-canvas" class="hidden"></canvas>
+          <div class="camera-actions">
+            <button id="camera-capture-btn" class="btn btn-primary">Capture</button>
+            <button id="camera-retake-btn" class="btn btn-secondary hidden">Retake</button>
+            <button id="camera-use-btn" class="btn btn-primary hidden">Use Photo</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- DRAWING SCREEN -->
+      <div id="drawing-screen" class="screen">
+        <div class="drawing-header">
+          <div class="round-info">
+            <span id="round-display">Round 1/4</span>
+            <span id="drawing-player">Drawing for: PlayerName</span>
+          </div>
+          <div class="timer">
+            <span id="timer-display">90</span>s
+          </div>
+        </div>
+
+        <div class="drawing-container">
+          <div class="reference-panel">
+            <h3>Reference Image</h3>
+            <div class="reference-image-container">
+              <img id="reference-image" alt="Reference">
+            </div>
+          </div>
+
+          <div class="canvas-panel">
+            <div class="tools">
+              <div class="tool-group">
+                <button id="pen-btn" class="tool-btn active" title="Pen">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 19l7-7 3 3-7 7-3-3z"/>
+                    <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/>
+                    <path d="M2 2l7.586 7.586"/>
+                    <circle cx="11" cy="11" r="2"/>
+                  </svg>
+                </button>
+                <button id="eraser-btn" class="tool-btn" title="Eraser">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M20 20H7L3 16l9-9 8 8-4 4z"/>
+                    <path d="M6 11l8 8"/>
+                  </svg>
+                </button>
+                <button id="fill-btn" class="tool-btn" title="Fill">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M19 11l-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11z"/>
+                    <path d="M5 21c.6-1.2 1.8-2 3-2 1.6 0 3 1.4 3 3"/>
+                    <path d="M19 11l2 2"/>
+                  </svg>
+                </button>
+              </div>
+
+              <div class="tool-group">
+                <div class="color-picker">
+                  <input type="color" id="color-picker" value="#000000">
+                  <div class="preset-colors">
+                    <button class="color-btn" data-color="#000000" style="background:#000000"></button>
+                    <button class="color-btn" data-color="#ff0000" style="background:#ff0000"></button>
+                    <button class="color-btn" data-color="#00ff00" style="background:#00ff00"></button>
+                    <button class="color-btn" data-color="#0000ff" style="background:#0000ff"></button>
+                    <button class="color-btn" data-color="#ffff00" style="background:#ffff00"></button>
+                    <button class="color-btn" data-color="#ff00ff" style="background:#ff00ff"></button>
+                    <button class="color-btn" data-color="#00ffff" style="background:#00ffff"></button>
+                    <button class="color-btn" data-color="#ffffff" style="background:#ffffff"></button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="tool-group">
+                <label for="brush-size">Size</label>
+                <input type="range" id="brush-size" min="1" max="30" value="3">
+                <span id="brush-size-display">3</span>
+              </div>
+
+              <div class="tool-group">
+                <button id="clear-btn" class="tool-btn" title="Clear Canvas">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                  </svg>
+                </button>
+                <button id="undo-btn" class="tool-btn" title="Undo">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="1 4 1 10 7 10"/>
+                    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <canvas id="drawing-canvas" width="600" height="500"></canvas>
+          </div>
+        </div>
+
+        <div class="drawing-actions">
+          <button id="submit-drawing-btn" class="btn btn-primary">Submit Drawing</button>
+          <button id="next-round-btn" class="btn btn-secondary hidden">Skip to Next Round</button>
+        </div>
+      </div>
+
+      <!-- WAITING SCREEN -->
+      <div id="waiting-screen" class="screen">
+        <div class="waiting-container">
+          <h2>Waiting...</h2>
+          <p id="waiting-message">Other players are drawing. Sit tight!</p>
+          <div class="spinner"></div>
+        </div>
+      </div>
+
+      <!-- REVEAL SCREEN -->
+      <div id="reveal-screen" class="screen">
+        <div class="reveal-container">
+          <h2>Results!</h2>
+          <p>See how everyone recreated the images</p>
+          <div id="reveal-gallery" class="reveal-gallery"></div>
+          <div class="reveal-actions">
+            <button id="play-again-btn" class="btn btn-primary">Play Again</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <footer>
+      <p>DrawPhone - A drawing game for friends</p>
+    </footer>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
