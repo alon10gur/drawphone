@@ -18,6 +18,7 @@ let shapeStartX = 0;
 let shapeStartY = 0;
 let tempCanvas = null;
 let tempCtx = null;
+let isHost = false;
 
 const screens = {
   lobby: document.getElementById('lobby-screen'),
@@ -158,18 +159,24 @@ socket.on('players-update', (players) => {
   document.getElementById('player-count-badge').classList.remove('hidden');
 
   const host = players.find((p) => p.isHost && p.id === socket.id);
+  isHost = !!host;
   if (host) {
     document.getElementById('start-game-btn').classList.remove('hidden');
     document.getElementById('timer-select').disabled = false;
   } else {
+    document.getElementById('start-game-btn').classList.add('hidden');
     document.getElementById('timer-select').disabled = true;
   }
 });
 
 socket.on('host-changed', (newHostId) => {
-  if (newHostId === socket.id) {
+  isHost = newHostId === socket.id;
+  if (isHost) {
     document.getElementById('start-game-btn').classList.remove('hidden');
     document.getElementById('timer-select').disabled = false;
+  } else {
+    document.getElementById('start-game-btn').classList.add('hidden');
+    document.getElementById('timer-select').disabled = true;
   }
 });
 
@@ -186,6 +193,7 @@ function resetUpload() {
   document.getElementById('upload-preview').classList.add('hidden');
   document.getElementById('upload-placeholder').classList.remove('hidden');
   document.getElementById('submit-image-btn').classList.add('hidden');
+  document.getElementById('submit-image-btn').disabled = false;
   document.getElementById('upload-status').textContent = '';
   document.getElementById('file-input').value = '';
 }
@@ -569,6 +577,16 @@ function draw(e) {
   ctx.lineWidth = currentTool === 'eraser' ? brushSize * 2 : brushSize;
   ctx.stroke();
 
+  currentStrokes.push({
+    x1: lastX,
+    y1: lastY,
+    x2: x,
+    y2: y,
+    color: currentTool === 'eraser' ? '#ffffff' : currentColor,
+    size: currentTool === 'eraser' ? brushSize * 2 : brushSize,
+    time: Date.now() - lastStrokeTime,
+  });
+
   lastX = x;
   lastY = y;
 }
@@ -768,7 +786,7 @@ document.getElementById('undo-btn').addEventListener('click', () => {
 document.getElementById('submit-drawing-btn').addEventListener('click', () => {
   if (!drawingSubmitted) {
     const drawingData = canvas.toDataURL('image/jpeg', 0.8);
-    socket.emit('submit-drawing', roomCode, drawingData, currentReferenceImageIndex, []);
+    socket.emit('submit-drawing', roomCode, drawingData, currentReferenceImageIndex, currentStrokes);
   }
 });
 
@@ -826,7 +844,9 @@ socket.on('reveal-state', (data) => {
   } else if (!data.isLastImage) {
     nextImageBtn.classList.remove('hidden');
   } else {
-    playAgainBtn.classList.remove('hidden');
+    if (isHost) {
+      playAgainBtn.classList.remove('hidden');
+    }
     subtitle.textContent = 'All done!';
   }
 
@@ -837,7 +857,9 @@ socket.on('reveal-complete', () => {
   const subtitle = document.getElementById('reveal-subtitle');
   const playAgainBtn = document.getElementById('play-again-btn');
   subtitle.textContent = 'All images revealed!';
-  playAgainBtn.classList.remove('hidden');
+  if (isHost) {
+    playAgainBtn.classList.remove('hidden');
+  }
 });
 
 document.getElementById('reveal-next-btn').addEventListener('click', () => {
@@ -893,7 +915,13 @@ timelapsePauseBtn.addEventListener('click', () => {
 });
 
 function showTimelapse(strokes, playerName) {
-  timelapseStrokes = strokes;
+  timelapseStrokes = strokes.map((s) => ({
+    ...s,
+    x1: (s.x1 / 600) * 400,
+    y1: (s.y1 / 500) * 400,
+    x2: (s.x2 / 600) * 400,
+    y2: (s.y2 / 500) * 400,
+  }));
   timelapseIndex = 0;
   document.getElementById('timelapse-title').textContent = `Timelapse - ${playerName}`;
   timelapseCtx.fillStyle = 'white';
@@ -907,15 +935,16 @@ function showTimelapse(strokes, playerName) {
 function playTimelapse() {
   stopTimelapse();
   const speed = parseInt(timelapseSpeed.value);
-  timelapseInterval = setInterval(() => {
-    if (timelapseIndex >= timelapseStrokes.length) {
-      stopTimelapse();
+  let strokeIndex = 0;
+
+  function drawNextStroke() {
+    if (strokeIndex >= timelapseStrokes.length) {
       timelapsePauseBtn.classList.add('hidden');
       timelapsePlayBtn.classList.remove('hidden');
       return;
     }
 
-    const stroke = timelapseStrokes[timelapseIndex];
+    const stroke = timelapseStrokes[strokeIndex];
     timelapseCtx.strokeStyle = stroke.color;
     timelapseCtx.lineWidth = stroke.size;
     timelapseCtx.lineCap = 'round';
@@ -925,13 +954,18 @@ function playTimelapse() {
     timelapseCtx.lineTo(stroke.x2, stroke.y2);
     timelapseCtx.stroke();
 
-    timelapseIndex++;
-  }, 100 / speed);
+    strokeIndex++;
+
+    const delay = strokeIndex < timelapseStrokes.length ? timelapseStrokes[strokeIndex].time / speed : 0;
+    timelapseInterval = setTimeout(drawNextStroke, Math.max(10, delay));
+  }
+
+  drawNextStroke();
 }
 
 function stopTimelapse() {
   if (timelapseInterval) {
-    clearInterval(timelapseInterval);
+    clearTimeout(timelapseInterval);
     timelapseInterval = null;
   }
 }
