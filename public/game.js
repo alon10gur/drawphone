@@ -1,4 +1,61 @@
-const socket = io();
+const socket = io({ reconnection: true, reconnectionAttempts: 10, reconnectionDelay: 1000 });
+
+let storedPlayerId = localStorage.getItem('drawphone-player-id');
+let storedRoomCode = localStorage.getItem('drawphone-room-code');
+
+socket.on('connect', () => {
+  if (storedPlayerId && storedRoomCode) {
+    socket.emit('reconnect-attempt', storedPlayerId, (response) => {
+      if (response.success) {
+        roomCode = response.code;
+        isSpectator = false;
+        updateRoomInfo();
+        restoreGameState(response.phase, response.state);
+      } else {
+        localStorage.removeItem('drawphone-player-id');
+        localStorage.removeItem('drawphone-room-code');
+      }
+    });
+  }
+});
+
+function restoreGameState(phase, state) {
+  if (!state) return;
+
+  if (phase === 'upload') {
+    showScreen('upload');
+    resetUpload();
+  } else if (phase === 'drawing') {
+    currentRound = state.round;
+    totalRounds = state.totalRounds;
+    drawingSubmitted = false;
+    currentReferenceImageIndex = state.referenceImageIndex;
+    currentStrokes = [];
+    lastStrokeTime = Date.now();
+
+    document.getElementById('round-display').textContent = `Round ${state.round}/${state.totalRounds}`;
+    document.getElementById('drawing-player').textContent = `Recreate this image`;
+    document.getElementById('reference-image').src = state.referenceImage;
+    document.getElementById('timer-display').textContent = state.timeLeft;
+    document.getElementById('submission-counter').textContent = `0/${state.totalPlayers} submitted`;
+
+    clearCanvas();
+    drawingHistory = [];
+    saveCanvasState();
+
+    showScreen('drawing');
+    document.getElementById('submit-drawing-btn').classList.remove('hidden');
+    document.getElementById('submit-drawing-btn').disabled = false;
+  } else if (phase === 'reveal') {
+    socket.emit('request-reveal-state', roomCode);
+  } else if (phase === 'voting') {
+    showScreen('voting');
+    socket.emit('spectator-sync', roomCode);
+  } else if (phase === 'results') {
+    showScreen('results');
+    socket.emit('spectator-sync', roomCode);
+  }
+}
 
 let currentScreen = 'lobby';
 let roomCode = null;
@@ -20,6 +77,11 @@ let tempCanvas = null;
 let tempCtx = null;
 let isHost = false;
 let isSpectator = false;
+let soundEnabled = true;
+let theme = localStorage.getItem('drawphone-theme') || 'dark';
+let myPlayerId = null;
+let votingState = null;
+let votedItems = new Set();
 
 const screens = {
   lobby: document.getElementById('lobby-screen'),
@@ -28,6 +90,8 @@ const screens = {
   waiting: document.getElementById('waiting-screen'),
   spectator: document.getElementById('spectator-screen'),
   reveal: document.getElementById('reveal-screen'),
+  voting: document.getElementById('voting-screen'),
+  results: document.getElementById('results-screen'),
 };
 
 const canvas = document.getElementById('drawing-canvas');
@@ -44,7 +108,6 @@ tempCanvas.height = canvas.height;
 tempCtx = tempCanvas.getContext('2d');
 
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-let soundEnabled = true;
 
 function playTick() {
   if (!soundEnabled) return;
@@ -91,10 +154,37 @@ function playReveal() {
   osc.stop(audioCtx.currentTime + 0.3);
 }
 
+function playVote() {
+  if (!soundEnabled) return;
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.frequency.value = 523;
+  osc.type = 'sine';
+  gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
+  osc.start(audioCtx.currentTime);
+  osc.stop(audioCtx.currentTime + 0.2);
+}
+
 function showScreen(screenName) {
   Object.values(screens).forEach((s) => s.classList.remove('active'));
-  screens[screenName].classList.add('active');
+  if (screens[screenName]) {
+    screens[screenName].classList.add('active');
+  }
   currentScreen = screenName;
+}
+
+function applyTheme() {
+  document.documentElement.setAttribute('data-theme', theme);
+  const sunIcon = document.getElementById('theme-sun-icon');
+  const moonIcon = document.getElementById('theme-moon-icon');
+  if (sunIcon && moonIcon) {
+    sunIcon.classList.toggle('hidden', theme === 'dark');
+    moonIcon.classList.toggle('hidden', theme === 'light');
+  }
 }
 
 document.getElementById('player-name').addEventListener('input', (e) => {
@@ -109,6 +199,7 @@ document.getElementById('create-room-btn').addEventListener('click', () => {
   socket.emit('create-room', playerName, (response) => {
     if (response.success) {
       roomCode = response.code;
+      localStorage.setItem('drawphone-room-code', roomCode);
       updateRoomInfo();
     }
   });
@@ -127,6 +218,7 @@ document.getElementById('join-room-btn').addEventListener('click', () => {
   socket.emit('join-room', code, playerName, (response) => {
     if (response.success) {
       roomCode = code;
+      localStorage.setItem('drawphone-room-code', roomCode);
       isSpectator = response.isSpectator || false;
       updateRoomInfo();
       if (isSpectator) {
@@ -149,11 +241,17 @@ document.getElementById('copy-code-btn').addEventListener('click', () => {
 });
 
 document.getElementById('start-game-btn').addEventListener('click', () => {
+  if (!roomCode) {
+    alert('No room code found. Please refresh and create/join again.');
+    return;
+  }
   const duration = parseInt(document.getElementById('timer-select').value);
   socket.emit('set-timer', roomCode, duration);
-  setTimeout(() => {
-    socket.emit('start-game', roomCode);
-  }, 100);
+  socket.emit('start-game', roomCode, (response) => {
+    if (response && !response.success) {
+      alert('Could not start game: ' + (response.error || 'Unknown error'));
+    }
+  });
 });
 
 function updateRoomInfo() {
@@ -168,6 +266,9 @@ function escapeHtml(text) {
 }
 
 socket.on('players-update', (players, spectators = []) => {
+  myPlayerId = socket.id;
+  localStorage.setItem('drawphone-player-id', socket.id);
+
   const list = document.getElementById('players-list');
   list.innerHTML = players
     .map((p) => `<li class="${p.isHost ? 'host' : ''}">${escapeHtml(p.name)}</li>`)
@@ -224,6 +325,15 @@ socket.on('host-changed', (newHostId) => {
       const playAgainBtn = document.getElementById('play-again-btn');
       nextBtn.classList.add('hidden');
       nextImageBtn.classList.add('hidden');
+      playAgainBtn.classList.add('hidden');
+    }
+  }
+
+  if (currentScreen === 'results') {
+    const playAgainBtn = document.getElementById('results-play-again-btn');
+    if (isHost) {
+      playAgainBtn.classList.remove('hidden');
+    } else {
       playAgainBtn.classList.add('hidden');
     }
   }
@@ -449,7 +559,7 @@ socket.on('round-start-personal', (data) => {
   document.getElementById('drawing-player').textContent = `Recreate this image`;
   document.getElementById('reference-image').src = data.referenceImage;
   document.getElementById('timer-display').textContent = data.timeLeft;
-  document.getElementById('submission-counter').textContent = `0/${totalRounds} submitted`;
+  document.getElementById('submission-counter').textContent = `0/${data.totalPlayers} submitted`;
 
   clearCanvas();
   drawingHistory = [];
@@ -737,16 +847,14 @@ function stopDrawing(e) {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
-    const clientX = e && e.type !== 'mouseout' ? e.clientX : lastX;
-    const clientY = e && e.type !== 'mouseout' ? e.clientY : lastY;
-    const x = (clientX - rect.left) * scaleX;
-    const y = (clientY - rect.top) * scaleY;
+    const x = (lastX * scaleX) / scaleX;
+    const y = (lastY * scaleY) / scaleY;
 
     currentStrokes.push({
       x1: shapeStartX,
       y1: shapeStartY,
-      x2: x,
-      y2: y,
+      x2: lastX,
+      y2: lastY,
       color: currentColor,
       size: brushSize,
       time: Date.now() - lastStrokeTime,
@@ -846,71 +954,21 @@ function clearCanvas() {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 }
 
-document.getElementById('pen-btn').addEventListener('click', () => {
-  currentTool = 'pen';
-  document.getElementById('pen-btn').classList.add('active');
-  document.getElementById('eraser-btn').classList.remove('active');
-  document.getElementById('fill-btn').classList.remove('active');
-  document.getElementById('line-btn').classList.remove('active');
-  document.getElementById('rect-btn').classList.remove('active');
-  document.getElementById('circle-btn').classList.remove('active');
-  canvas.style.cursor = 'crosshair';
-});
+document.getElementById('pen-btn').addEventListener('click', () => setTool('pen'));
+document.getElementById('eraser-btn').addEventListener('click', () => setTool('eraser'));
+document.getElementById('fill-btn').addEventListener('click', () => setTool('fill'));
+document.getElementById('line-btn').addEventListener('click', () => setTool('line'));
+document.getElementById('rect-btn').addEventListener('click', () => setTool('rect'));
+document.getElementById('circle-btn').addEventListener('click', () => setTool('circle'));
 
-document.getElementById('eraser-btn').addEventListener('click', () => {
-  currentTool = 'eraser';
-  document.getElementById('eraser-btn').classList.add('active');
-  document.getElementById('pen-btn').classList.remove('active');
-  document.getElementById('fill-btn').classList.remove('active');
-  document.getElementById('line-btn').classList.remove('active');
-  document.getElementById('rect-btn').classList.remove('active');
-  document.getElementById('circle-btn').classList.remove('active');
-  canvas.style.cursor = 'crosshair';
-});
-
-document.getElementById('fill-btn').addEventListener('click', () => {
-  currentTool = 'fill';
-  document.getElementById('fill-btn').classList.add('active');
-  document.getElementById('pen-btn').classList.remove('active');
-  document.getElementById('eraser-btn').classList.remove('active');
-  document.getElementById('line-btn').classList.remove('active');
-  document.getElementById('rect-btn').classList.remove('active');
-  document.getElementById('circle-btn').classList.remove('active');
-  canvas.style.cursor = 'cell';
-});
-
-document.getElementById('line-btn').addEventListener('click', () => {
-  currentTool = 'line';
-  document.getElementById('line-btn').classList.add('active');
-  document.getElementById('pen-btn').classList.remove('active');
-  document.getElementById('eraser-btn').classList.remove('active');
-  document.getElementById('fill-btn').classList.remove('active');
-  document.getElementById('rect-btn').classList.remove('active');
-  document.getElementById('circle-btn').classList.remove('active');
-  canvas.style.cursor = 'crosshair';
-});
-
-document.getElementById('rect-btn').addEventListener('click', () => {
-  currentTool = 'rect';
-  document.getElementById('rect-btn').classList.add('active');
-  document.getElementById('pen-btn').classList.remove('active');
-  document.getElementById('eraser-btn').classList.remove('active');
-  document.getElementById('fill-btn').classList.remove('active');
-  document.getElementById('line-btn').classList.remove('active');
-  document.getElementById('circle-btn').classList.remove('active');
-  canvas.style.cursor = 'crosshair';
-});
-
-document.getElementById('circle-btn').addEventListener('click', () => {
-  currentTool = 'circle';
-  document.getElementById('circle-btn').classList.add('active');
-  document.getElementById('pen-btn').classList.remove('active');
-  document.getElementById('eraser-btn').classList.remove('active');
-  document.getElementById('fill-btn').classList.remove('active');
-  document.getElementById('line-btn').classList.remove('active');
-  document.getElementById('rect-btn').classList.remove('active');
-  canvas.style.cursor = 'crosshair';
-});
+function setTool(tool) {
+  currentTool = tool;
+  const tools = ['pen', 'eraser', 'fill', 'line', 'rect', 'circle'];
+  tools.forEach((t) => {
+    document.getElementById(`${t}-btn`).classList.toggle('active', t === tool);
+  });
+  canvas.style.cursor = tool === 'fill' ? 'cell' : 'crosshair';
+}
 
 document.getElementById('color-picker').addEventListener('input', (e) => {
   currentColor = e.target.value;
@@ -945,24 +1003,63 @@ document.getElementById('undo-btn').addEventListener('click', () => {
   }
 });
 
-document.getElementById('submit-drawing-btn').addEventListener('click', () => {
+document.getElementById('submit-drawing-btn').addEventListener('click', submitDrawing);
+
+document.getElementById('sound-toggle-btn').addEventListener('click', () => {
+  soundEnabled = !soundEnabled;
+  document.getElementById('sound-on-icon').classList.toggle('hidden', !soundEnabled);
+  document.getElementById('sound-off-icon').classList.toggle('hidden', soundEnabled);
+  localStorage.setItem('drawphone-sound', soundEnabled ? '1' : '0');
+});
+
+document.getElementById('theme-toggle-btn').addEventListener('click', () => {
+  theme = theme === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('drawphone-theme', theme);
+  applyTheme();
+});
+
+function submitDrawing() {
   if (!drawingSubmitted) {
     drawingSubmitted = true;
     document.getElementById('submit-drawing-btn').disabled = true;
     const drawingData = canvas.toDataURL('image/jpeg', 0.8);
     socket.emit('submit-drawing', roomCode, drawingData, currentReferenceImageIndex, currentStrokes);
   }
-});
+}
 
-document.getElementById('sound-toggle-btn').addEventListener('click', () => {
-  soundEnabled = !soundEnabled;
-  document.getElementById('sound-on-icon').classList.toggle('hidden', !soundEnabled);
-  document.getElementById('sound-off-icon').classList.toggle('hidden', soundEnabled);
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+  if (e.ctrlKey && e.key === 'z') {
+    e.preventDefault();
+    document.getElementById('undo-btn').click();
+    return;
+  }
+
+  if (e.ctrlKey && e.key === 'Enter') {
+    e.preventDefault();
+    if (currentScreen === 'drawing' && !drawingSubmitted) {
+      submitDrawing();
+    }
+    return;
+  }
+
+  if (currentScreen === 'drawing') {
+    const toolKeys = { '1': 'pen', '2': 'eraser', '3': 'fill', '4': 'line', '5': 'rect', '6': 'circle' };
+    if (toolKeys[e.key]) {
+      e.preventDefault();
+      setTool(toolKeys[e.key]);
+    }
+  }
 });
 
 socket.on('phase-change', (data) => {
   if (data.phase === 'reveal') {
     showScreen('reveal');
+  } else if (data.phase === 'voting') {
+    showScreen('voting');
+  } else if (data.phase === 'results') {
+    showScreen('results');
   }
 });
 
@@ -1012,7 +1109,7 @@ socket.on('reveal-state', (data) => {
     card.innerHTML = `
       <h4>${escapeHtml(d.playerName)}</h4>
       <img src="${d.data}" alt="${escapeHtml(d.playerName)}'s drawing">
-      ${d.strokes && d.strokes.length > 0 ? '<button class="btn btn-small timelapse-btn" data-player-id="' + escapeHtml(d.playerId) + '" data-stroke-count="' + d.strokes.length + '">Timelapse</button>' : ''}
+      ${d.strokes && d.strokes.length > 0 ? '<button class="btn btn-small timelapse-btn" data-player-id="' + escapeHtml(d.playerId) + '" data-stroke-count="' + d.strokes.length + '" aria-label="View timelapse of ' + escapeHtml(d.playerName) + '\'s drawing">Timelapse</button>' : ''}
     `;
     drawingsContainer.appendChild(card);
   });
@@ -1075,6 +1172,10 @@ document.getElementById('play-again-btn').addEventListener('click', () => {
   socket.emit('play-again', roomCode);
 });
 
+document.getElementById('results-play-again-btn').addEventListener('click', () => {
+  socket.emit('play-again', roomCode);
+});
+
 socket.on('back-to-lobby', () => {
   isSpectator = false;
   showScreen('lobby');
@@ -1091,6 +1192,197 @@ socket.on('back-to-lobby', () => {
   totalRounds = 0;
   resetUpload();
 });
+
+socket.on('voting-state', (data) => {
+  votingState = data;
+  votedItems = new Set();
+  renderVotingUI(data);
+});
+
+function renderVotingUI(data) {
+  const container = document.getElementById('voting-grid');
+  container.innerHTML = '';
+
+  if (!data.voteItems || data.voteItems.length === 0) {
+    container.innerHTML = '<p class="no-votes">No drawings to vote on.</p>';
+    return;
+  }
+
+  data.voteItems.forEach((item) => {
+    const key = `${item.imageIndex}-${item.drawingPlayerId}`;
+    const alreadyVoted = votedItems.has(key);
+    const isOwnDrawing = item.drawingPlayerId === myPlayerId;
+    const card = document.createElement('div');
+    card.className = 'vote-card';
+    card.dataset.key = key;
+    card.innerHTML = `
+      <div class="vote-card-header">
+        <span class="vote-original-label">Original by ${escapeHtml(item.originalPlayer)}</span>
+      </div>
+      <img src="${item.originalImage}" alt="Original image" class="vote-original-img">
+      <div class="vote-divider"></div>
+      <div class="vote-card-header">
+        <span class="vote-drawer-label">Recreation by ${escapeHtml(item.drawingPlayerName)}</span>
+      </div>
+      <img src="${item.drawing}" alt="${escapeHtml(item.drawingPlayerName)}'s recreation" class="vote-drawing-img">
+      <div class="vote-score">Score: ${data.scores[item.drawingPlayerId] || 0}</div>
+      ${isOwnDrawing ? '<div class="vote-own-label">Your drawing</div>' : `<button class="btn btn-primary vote-btn" ${alreadyVoted ? 'disabled' : ''} data-key="${key}" data-image-index="${item.imageIndex}" data-drawing-player-id="${item.drawingPlayerId}">${alreadyVoted ? 'Voted' : 'Vote +1'}</button>`}
+    `;
+    container.appendChild(card);
+  });
+
+  container.querySelectorAll('.vote-btn:not([disabled])').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const imageIndex = parseInt(btn.dataset.imageIndex);
+      const drawingPlayerId = btn.dataset.drawingPlayerId;
+      socket.emit('vote-drawing', roomCode, imageIndex, drawingPlayerId, 1);
+    });
+  });
+}
+
+socket.on('vote-recorded', (data) => {
+  const card = document.querySelector(`.vote-card[data-key="${data.imageIndex}-${data.drawingPlayerId}"]`);
+  if (card) {
+    const scoreEl = card.querySelector('.vote-score');
+    if (scoreEl) scoreEl.textContent = `Score: ${data.totalScore}`;
+    const voteBtn = card.querySelector('.vote-btn');
+    if (voteBtn) {
+      voteBtn.disabled = true;
+      voteBtn.textContent = 'Voted';
+    }
+  }
+  votedItems.add(`${data.imageIndex}-${data.drawingPlayerId}`);
+  playVote();
+});
+
+socket.on('results-state', (data) => {
+  renderResultsUI(data);
+});
+
+socket.on('emoji-reaction', (data) => {
+  spawnEmoji(data.emoji);
+});
+
+function spawnEmoji(emoji) {
+  const containers = document.querySelectorAll('.emoji-container');
+  containers.forEach((container) => {
+    const el = document.createElement('div');
+    el.className = 'emoji-float';
+    el.textContent = emoji;
+    el.style.left = `${20 + Math.random() * 60}%`;
+    el.style.animationDuration = `${2 + Math.random() * 2}s`;
+    container.appendChild(el);
+
+    setTimeout(() => {
+      if (el.parentNode) el.parentNode.removeChild(el);
+    }, 4000);
+  });
+}
+
+document.querySelectorAll('.emoji-bar').forEach((emojiBar) => {
+  const emojis = ['', '', '', '', '', '', '', ''];
+  emojis.forEach((emoji) => {
+    const btn = document.createElement('button');
+    btn.className = 'emoji-btn';
+    btn.textContent = emoji;
+    btn.setAttribute('aria-label', `Send ${emoji} reaction`);
+    btn.addEventListener('click', () => {
+      socket.emit('emoji-reaction', roomCode, emoji);
+    });
+    emojiBar.appendChild(btn);
+  });
+});
+
+  data.voteItems.forEach((item) => {
+    const key = `${item.imageIndex}-${item.drawingPlayerId}`;
+    const alreadyVoted = votedItems.has(key);
+    const card = document.createElement('div');
+    card.className = 'vote-card';
+    card.dataset.key = key;
+    card.innerHTML = `
+      <div class="vote-card-header">
+        <span class="vote-original-label">Original by ${escapeHtml(item.originalPlayer)}</span>
+      </div>
+      <img src="${item.originalImage}" alt="Original image" class="vote-original-img">
+      <div class="vote-divider"></div>
+      <div class="vote-card_header">
+        <span class="vote-drawer-label">Recreation by ${escapeHtml(item.drawingPlayerName)}</span>
+      </div>
+      <img src="${item.drawing}" alt="${escapeHtml(item.drawingPlayerName)}'s recreation" class="vote-drawing-img">
+      <div class="vote-score">Score: ${data.scores[item.drawingPlayerId] || 0}</div>
+      <button class="btn btn-primary vote-btn" ${alreadyVoted ? 'disabled' : ''} data-key="${key}" data-image-index="${item.imageIndex}" data-drawing-player-id="${item.drawingPlayerId}">
+        ${alreadyVoted ? 'Voted' : 'Vote +1'}
+      </button>
+    `;
+    container.appendChild(card);
+  });
+
+  container.querySelectorAll('.vote-btn:not([disabled])').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const imageIndex = parseInt(btn.dataset.imageIndex);
+      const drawingPlayerId = btn.dataset.drawingPlayerId;
+      socket.emit('vote-drawing', roomCode, imageIndex, drawingPlayerId, 1);
+    });
+  });
+}
+
+function renderResultsUI(data) {
+  const container = document.getElementById('results-list');
+  container.innerHTML = '';
+
+  if (!data.rankings || data.rankings.length === 0) {
+    container.innerHTML = '<p class="no-results">No results yet.</p>';
+    return;
+  }
+
+  const medals = ['', '', ''];
+  data.rankings.forEach((entry, idx) => {
+    const isMe = entry.playerId === socket.id;
+    const card = document.createElement('div');
+    card.className = `result-card ${isMe ? 'result-card-me' : ''} ${idx === 0 ? 'result-card-first' : ''}`;
+    card.innerHTML = `
+      <div class="result-rank">${idx === 0 ? '' : idx === 1 ? '' : idx === 2 ? '' : `#${idx + 1}`}</div>
+      <div class="result-name">${escapeHtml(entry.playerName)}${isMe ? ' (You)' : ''}</div>
+      <div class="result-score">${entry.score} point${entry.score !== 1 ? 's' : ''}</div>
+    `;
+    container.appendChild(card);
+  });
+
+  if (isHost) {
+    document.getElementById('results-play-again-btn').classList.remove('hidden');
+  }
+}
+
+function spawnEmoji(emoji, playerName) {
+  const container = document.getElementById('emoji-container');
+  if (!container) return;
+
+  const el = document.createElement('div');
+  el.className = 'emoji-float';
+  el.textContent = emoji;
+  el.style.left = `${20 + Math.random() * 60}%`;
+  el.style.animationDuration = `${2 + Math.random() * 2}s`;
+  container.appendChild(el);
+
+  setTimeout(() => {
+    if (el.parentNode) el.parentNode.removeChild(el);
+  }, 4000);
+}
+
+const emojiBar = document.getElementById('emoji-bar');
+if (emojiBar) {
+  const emojis = ['', '', '', '', '', '', '', ''];
+  emojis.forEach((emoji) => {
+    const btn = document.createElement('button');
+    btn.className = 'emoji-btn';
+    btn.textContent = emoji;
+    btn.setAttribute('aria-label', `Send ${emoji} reaction`);
+    btn.addEventListener('click', () => {
+      socket.emit('emoji-reaction', roomCode, emoji);
+    });
+    emojiBar.appendChild(btn);
+  });
+}
 
 const timelapseModal = document.getElementById('timelapse-modal');
 const timelapseCanvas = document.getElementById('timelapse-canvas');
@@ -1125,12 +1417,17 @@ timelapsePauseBtn.addEventListener('click', () => {
 });
 
 function showTimelapse(strokes, playerName) {
+  const canvasW = canvas.width;
+  const canvasH = canvas.height;
+  const timelapseW = timelapseCanvas.width;
+  const timelapseH = timelapseCanvas.height;
+
   timelapseStrokes = strokes.map((s) => ({
     ...s,
-    x1: (s.x1 / 600) * 400,
-    y1: (s.y1 / 500) * 400,
-    x2: (s.x2 / 600) * 400,
-    y2: (s.y2 / 500) * 400,
+    x1: (s.x1 / canvasW) * timelapseW,
+    y1: (s.y1 / canvasH) * timelapseH,
+    x2: (s.x2 / canvasW) * timelapseW,
+    y2: (s.y2 / canvasH) * timelapseH,
   }));
   document.getElementById('timelapse-title').textContent = `Timelapse - ${playerName}`;
   timelapseCtx.fillStyle = 'white';
@@ -1190,3 +1487,18 @@ function stopTimelapse() {
     timelapseInterval = null;
   }
 }
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
+
+const savedSound = localStorage.getItem('drawphone-sound');
+if (savedSound !== null) {
+  soundEnabled = savedSound === '1';
+  document.getElementById('sound-on-icon').classList.toggle('hidden', !soundEnabled);
+  document.getElementById('sound-off-icon').classList.toggle('hidden', soundEnabled);
+}
+
+applyTheme();
