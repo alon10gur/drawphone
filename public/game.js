@@ -209,7 +209,6 @@ socket.on('upload-confirmed', () => {
   document.getElementById('upload-status').textContent = 'Image submitted! Waiting for others...';
 });
 
-// Camera functionality
 const cameraModal = document.getElementById('camera-modal');
 const cameraVideo = document.getElementById('camera-video');
 const cameraCanvas = document.getElementById('camera-canvas');
@@ -302,13 +301,13 @@ function stopCamera() {
   }
 }
 
-socket.on('round-start', (data) => {
+socket.on('round-start-personal', (data) => {
   currentRound = data.round;
   totalRounds = data.totalRounds;
   drawingSubmitted = false;
 
   document.getElementById('round-display').textContent = `Round ${data.round}/${data.totalRounds}`;
-  document.getElementById('drawing-player').textContent = `Recreating ${data.drawingPlayer}'s image`;
+  document.getElementById('drawing-player').textContent = `Recreate this image`;
   document.getElementById('reference-image').src = data.referenceImage;
   document.getElementById('timer-display').textContent = data.timeLeft;
 
@@ -319,6 +318,11 @@ socket.on('round-start', (data) => {
   showScreen('drawing');
   document.getElementById('submit-drawing-btn').classList.remove('hidden');
   document.getElementById('next-round-btn').classList.add('hidden');
+});
+
+socket.on('round-info', (data) => {
+  document.getElementById('round-display').textContent = `Round ${data.round}/${data.totalRounds}`;
+  document.getElementById('timer-display').textContent = data.timeLeft;
 });
 
 socket.on('timer-update', (timeLeft) => {
@@ -338,7 +342,6 @@ socket.on('timer-update', (timeLeft) => {
 socket.on('drawing-submitted', () => {
   drawingSubmitted = true;
   document.getElementById('submit-drawing-btn').classList.add('hidden');
-  document.getElementById('next-round-btn').classList.remove('hidden');
   showScreen('waiting');
   document.getElementById('waiting-message').textContent = 'Drawing submitted! Waiting for others...';
 });
@@ -610,7 +613,7 @@ function loadRevealData() {
       }
 
       card.innerHTML = `
-        <h3>Round ${index + 1} - ${item.originalPlayer}'s Image</h3>
+        <h3>Round ${index + 1}</h3>
         <div class="reveal-images">
           <div class="reveal-image">
             <h4>Original</h4>

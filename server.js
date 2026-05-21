@@ -134,21 +134,31 @@ io.on('connection', (socket) => {
       return;
     }
 
+    const players = Array.from(room.players.values());
     const images = room.images;
-    const imageIndex = room.currentRound % images.length;
-    const referenceImage = images[imageIndex];
-    const referencePlayer = room.players.get(referenceImage.playerId);
+    const shift = room.currentRound + 1;
 
     room.timeLeft = 90;
     room.submissionsCount = 0;
     room.drawings[room.currentRound] = [];
 
-    io.to(roomCode).emit('round-start', {
+    players.forEach((player) => {
+      const playerIndex = players.indexOf(player);
+      const imageIndex = (playerIndex + shift) % images.length;
+      const referenceImage = images[imageIndex];
+
+      socket.to(roomCode).emit('round-start-personal', {
+        round: room.currentRound + 1,
+        totalRounds: room.totalRounds,
+        referenceImage: referenceImage.data,
+        referencePlayerId: referenceImage.playerId,
+        timeLeft: room.timeLeft,
+      });
+    });
+
+    io.to(roomCode).emit('round-info', {
       round: room.currentRound + 1,
       totalRounds: room.totalRounds,
-      drawingPlayer: referencePlayer ? referencePlayer.name : 'Unknown',
-      referenceImage: referenceImage.data,
-      referencePlayerId: referenceImage.playerId,
       timeLeft: room.timeLeft,
     });
 
@@ -209,9 +219,12 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomCode);
     if (!room) return callback(null);
 
-    const revealData = room.images.map((img, index) => {
-      const player = room.players.get(img.playerId);
-      const roundDrawings = room.drawings[index] || [];
+    const players = Array.from(room.players.values());
+    const images = room.images;
+
+    const revealData = images.map((img, imageIndex) => {
+      const originalPlayer = room.players.get(img.playerId);
+      const roundDrawings = room.drawings[imageIndex] || [];
       const recreations = roundDrawings.map((d) => ({
         playerId: d.playerId,
         playerName: room.players.get(d.playerId)?.name || 'Unknown',
@@ -220,7 +233,7 @@ io.on('connection', (socket) => {
 
       return {
         original: img.data,
-        originalPlayer: player ? player.name : 'Unknown',
+        originalPlayer: originalPlayer ? originalPlayer.name : 'Unknown',
         recreations,
       };
     });
