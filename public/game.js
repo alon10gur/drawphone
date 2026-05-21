@@ -1,6 +1,6 @@
 const socket = io();
 
-let currentScreen = 'lobby-screen';
+let currentScreen = 'lobby';
 let roomCode = null;
 let playerName = '';
 let isDrawing = false;
@@ -19,12 +19,14 @@ let shapeStartY = 0;
 let tempCanvas = null;
 let tempCtx = null;
 let isHost = false;
+let isSpectator = false;
 
 const screens = {
   lobby: document.getElementById('lobby-screen'),
   upload: document.getElementById('upload-screen'),
   drawing: document.getElementById('drawing-screen'),
   waiting: document.getElementById('waiting-screen'),
+  spectator: document.getElementById('spectator-screen'),
   reveal: document.getElementById('reveal-screen'),
 };
 
@@ -42,8 +44,10 @@ tempCanvas.height = canvas.height;
 tempCtx = tempCanvas.getContext('2d');
 
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+let soundEnabled = true;
 
 function playTick() {
+  if (!soundEnabled) return;
   if (audioCtx.state === 'suspended') audioCtx.resume();
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
@@ -58,6 +62,7 @@ function playTick() {
 }
 
 function playSubmit() {
+  if (!soundEnabled) return;
   if (audioCtx.state === 'suspended') audioCtx.resume();
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
@@ -72,6 +77,7 @@ function playSubmit() {
 }
 
 function playReveal() {
+  if (!soundEnabled) return;
   if (audioCtx.state === 'suspended') audioCtx.resume();
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
@@ -121,7 +127,13 @@ document.getElementById('join-room-btn').addEventListener('click', () => {
   socket.emit('join-room', code, playerName, (response) => {
     if (response.success) {
       roomCode = code;
+      isSpectator = response.isSpectator || false;
       updateRoomInfo();
+      if (isSpectator) {
+        showScreen('spectator');
+        document.getElementById('spectator-subtitle').textContent = `Game in progress - Phase: ${response.phase}`;
+        socket.emit('spectator-sync', roomCode);
+      }
     } else {
       alert(response.error);
     }
@@ -149,10 +161,16 @@ function updateRoomInfo() {
   document.getElementById('room-code').textContent = roomCode;
 }
 
-socket.on('players-update', (players) => {
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+socket.on('players-update', (players, spectators = []) => {
   const list = document.getElementById('players-list');
   list.innerHTML = players
-    .map((p) => `<li class="${p.isHost ? 'host' : ''}">${p.name}</li>`)
+    .map((p) => `<li class="${p.isHost ? 'host' : ''}">${escapeHtml(p.name)}</li>`)
     .join('');
 
   document.getElementById('player-count').textContent = players.length;
@@ -167,6 +185,24 @@ socket.on('players-update', (players) => {
     document.getElementById('start-game-btn').classList.add('hidden');
     document.getElementById('timer-select').disabled = true;
   }
+
+  if (currentScreen === 'spectator') {
+    document.getElementById('spectator-player-count').textContent = `${players.length} players`;
+    document.getElementById('spectator-count-badge').textContent = `${spectators.length} watching`;
+  }
+
+  if (currentScreen === 'reveal') {
+    if (isHost) {
+      socket.emit('request-reveal-state', roomCode);
+    } else {
+      const nextBtn = document.getElementById('reveal-next-btn');
+      const nextImageBtn = document.getElementById('reveal-next-image-btn');
+      const playAgainBtn = document.getElementById('play-again-btn');
+      nextBtn.classList.add('hidden');
+      nextImageBtn.classList.add('hidden');
+      playAgainBtn.classList.add('hidden');
+    }
+  }
 });
 
 socket.on('host-changed', (newHostId) => {
@@ -178,6 +214,19 @@ socket.on('host-changed', (newHostId) => {
     document.getElementById('start-game-btn').classList.add('hidden');
     document.getElementById('timer-select').disabled = true;
   }
+
+  if (currentScreen === 'reveal') {
+    if (isHost) {
+      socket.emit('request-reveal-state', roomCode);
+    } else {
+      const nextBtn = document.getElementById('reveal-next-btn');
+      const nextImageBtn = document.getElementById('reveal-next-image-btn');
+      const playAgainBtn = document.getElementById('play-again-btn');
+      nextBtn.classList.add('hidden');
+      nextImageBtn.classList.add('hidden');
+      playAgainBtn.classList.add('hidden');
+    }
+  }
 });
 
 socket.on('timer-updated', (duration) => {
@@ -185,6 +234,15 @@ socket.on('timer-updated', (duration) => {
 });
 
 socket.on('game-started', (data) => {
+  if (isSpectator) {
+    showScreen('spectator');
+    document.getElementById('spectator-title').textContent = 'Spectating';
+    document.getElementById('spectator-subtitle').textContent = 'Players uploading images...';
+    document.getElementById('spectator-stage').classList.add('hidden');
+    document.getElementById('spectator-drawings').innerHTML = '';
+    document.getElementById('spectator-progress-text').textContent = '';
+    return;
+  }
   showScreen('upload');
   resetUpload();
 });
@@ -385,6 +443,7 @@ socket.on('round-start-personal', (data) => {
   drawingSubmitted = false;
   currentReferenceImageIndex = data.referenceImageIndex;
   currentStrokes = [];
+  lastStrokeTime = Date.now();
 
   document.getElementById('round-display').textContent = `Round ${data.round}/${data.totalRounds}`;
   document.getElementById('drawing-player').textContent = `Recreate this image`;
@@ -398,6 +457,7 @@ socket.on('round-start-personal', (data) => {
 
   showScreen('drawing');
   document.getElementById('submit-drawing-btn').classList.remove('hidden');
+  document.getElementById('submit-drawing-btn').disabled = false;
 });
 
 socket.on('round-info', (data) => {
@@ -435,7 +495,54 @@ socket.on('drawing-submitted', (data) => {
 });
 
 socket.on('round-ended', () => {
+  if (isSpectator) {
+    document.getElementById('spectator-title').textContent = 'Round complete!';
+    document.getElementById('spectator-subtitle').textContent = 'Moving to reveal phase...';
+    return;
+  }
   document.getElementById('waiting-message').textContent = 'Round complete!';
+  showScreen('waiting');
+  document.getElementById('submit-drawing-btn').classList.add('hidden');
+});
+
+socket.on('spectator-phase', (data) => {
+  showScreen('spectator');
+
+  if (data.phase === 'upload') {
+    document.getElementById('spectator-title').textContent = 'Spectating';
+    document.getElementById('spectator-subtitle').textContent = `Players uploading images (${data.imagesUploaded}/${data.totalPlayers})`;
+    document.getElementById('spectator-stage').classList.add('hidden');
+    document.getElementById('spectator-drawings').innerHTML = '';
+    document.getElementById('spectator-progress-text').textContent = '';
+  } else if (data.phase === 'drawing') {
+    document.getElementById('spectator-title').textContent = `Spectating - Round ${data.round}/${data.totalRounds}`;
+    document.getElementById('spectator-subtitle').textContent = `${data.submissionsCount}/${data.totalPlayers} submitted`;
+    document.getElementById('spectator-stage').classList.remove('hidden');
+    document.getElementById('spectator-ref-img').src = data.referenceImage;
+    document.getElementById('spectator-drawings').innerHTML = '';
+    document.getElementById('spectator-progress-text').textContent = `Round ${data.round} of ${data.totalRounds}`;
+  }
+});
+
+socket.on('spectator-drawing', (data) => {
+  const container = document.getElementById('spectator-drawings');
+  const card = document.createElement('div');
+  card.className = 'spectator-drawing-card';
+  card.innerHTML = `
+    <h4>${escapeHtml(data.playerName)}</h4>
+    <img src="${data.drawing}" alt="${escapeHtml(data.playerName)}'s drawing">
+  `;
+  container.appendChild(card);
+
+  if (data.submissionsCount !== undefined) {
+    document.getElementById('spectator-subtitle').textContent = `${data.submissionsCount}/${data.totalPlayers} submitted`;
+  }
+});
+
+socket.on('spectator-timer', (data) => {
+  if (currentScreen === 'spectator') {
+    document.getElementById('spectator-subtitle').textContent = `${data.submissionsCount}/${data.totalPlayers} submitted - ${data.timeLeft}s left`;
+  }
 });
 
 let lastX = 0;
@@ -445,7 +552,7 @@ let lastStrokeTime = 0;
 canvas.addEventListener('mousedown', startDrawing);
 canvas.addEventListener('mousemove', draw);
 canvas.addEventListener('mouseup', stopDrawing);
-canvas.addEventListener('mouseout', stopDrawing);
+canvas.addEventListener('mouseout', (e) => stopDrawing(e));
 
 canvas.addEventListener('touchstart', (e) => {
   e.preventDefault();
@@ -465,6 +572,8 @@ canvas.addEventListener('touchstart', (e) => {
   if (currentTool === 'line' || currentTool === 'rect' || currentTool === 'circle') {
     shapeStartX = x;
     shapeStartY = y;
+    lastX = x;
+    lastY = y;
     tempCtx.drawImage(canvas, 0, 0);
     isDrawing = true;
     return;
@@ -508,16 +617,43 @@ canvas.addEventListener('touchmove', (e) => {
   ctx.lineWidth = currentTool === 'eraser' ? brushSize * 2 : brushSize;
   ctx.stroke();
 
+  currentStrokes.push({
+    x1: lastX,
+    y1: lastY,
+    x2: x,
+    y2: y,
+    color: currentTool === 'eraser' ? '#ffffff' : currentColor,
+    size: currentTool === 'eraser' ? brushSize * 2 : brushSize,
+    time: Date.now() - lastStrokeTime,
+  });
+
   lastX = x;
   lastY = y;
 });
 
-canvas.addEventListener('touchend', () => {
+canvas.addEventListener('touchend', (e) => {
   if (isDrawing) {
     isDrawing = false;
-    if (currentTool === 'pen' || currentTool === 'eraser') {
-      saveCanvasState();
+    if (currentTool === 'line' || currentTool === 'rect' || currentTool === 'circle') {
+      const touch = e.changedTouches[0];
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const x = (touch.clientX - rect.left) * scaleX;
+      const y = (touch.clientY - rect.top) * scaleY;
+
+      currentStrokes.push({
+        x1: shapeStartX,
+        y1: shapeStartY,
+        x2: x,
+        y2: y,
+        color: currentColor,
+        size: brushSize,
+        time: Date.now() - lastStrokeTime,
+        shape: currentTool,
+      });
     }
+    saveCanvasState();
   }
 });
 
@@ -537,6 +673,8 @@ function startDrawing(e) {
   if (currentTool === 'line' || currentTool === 'rect' || currentTool === 'circle') {
     shapeStartX = x;
     shapeStartY = y;
+    lastX = x;
+    lastY = y;
     tempCtx.drawImage(canvas, 0, 0);
     isDrawing = true;
     return;
@@ -591,11 +729,30 @@ function draw(e) {
   lastY = y;
 }
 
-function stopDrawing() {
+function stopDrawing(e) {
   if (!isDrawing) return;
   isDrawing = false;
 
   if (currentTool === 'line' || currentTool === 'rect' || currentTool === 'circle') {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const clientX = e && e.type !== 'mouseout' ? e.clientX : lastX;
+    const clientY = e && e.type !== 'mouseout' ? e.clientY : lastY;
+    const x = (clientX - rect.left) * scaleX;
+    const y = (clientY - rect.top) * scaleY;
+
+    currentStrokes.push({
+      x1: shapeStartX,
+      y1: shapeStartY,
+      x2: x,
+      y2: y,
+      color: currentColor,
+      size: brushSize,
+      time: Date.now() - lastStrokeTime,
+      shape: currentTool,
+    });
+
     saveCanvasState();
     return;
   }
@@ -640,8 +797,8 @@ function floodFill(startX, startY, fillColor) {
   if (targetR === fillR && targetG === fillG && targetB === fillB) return;
 
   const tolerance = 32;
-  const stack = [[startX, startY]];
-  const visited = new Set();
+  const visited = new Uint8Array(width * height);
+  const stack = [startX + startY * width];
 
   function matchesTarget(idx) {
     return (
@@ -651,22 +808,27 @@ function floodFill(startX, startY, fillColor) {
     );
   }
 
-  while (stack.length > 0) {
-    const [x, y] = stack.pop();
-    const idx = (y * width + x) * 4;
-    const key = `${x},${y}`;
+  let iterations = 0;
+  const maxIterations = width * height;
+
+  while (stack.length > 0 && iterations < maxIterations) {
+    iterations++;
+    const pos = stack.pop();
+    const x = pos % width;
+    const y = (pos - x) / width;
+    const idx = pos * 4;
 
     if (x < 0 || x >= width || y < 0 || y >= height) continue;
-    if (visited.has(key)) continue;
+    if (visited[pos]) continue;
     if (!matchesTarget(idx)) continue;
 
-    visited.add(key);
+    visited[pos] = 1;
     data[idx] = fillR;
     data[idx + 1] = fillG;
     data[idx + 2] = fillB;
     data[idx + 3] = 255;
 
-    stack.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
+    stack.push(pos + 1, pos - 1, pos + width, pos - width);
   }
 
   ctx.putImageData(imageData, 0, 0);
@@ -785,9 +947,17 @@ document.getElementById('undo-btn').addEventListener('click', () => {
 
 document.getElementById('submit-drawing-btn').addEventListener('click', () => {
   if (!drawingSubmitted) {
+    drawingSubmitted = true;
+    document.getElementById('submit-drawing-btn').disabled = true;
     const drawingData = canvas.toDataURL('image/jpeg', 0.8);
     socket.emit('submit-drawing', roomCode, drawingData, currentReferenceImageIndex, currentStrokes);
   }
+});
+
+document.getElementById('sound-toggle-btn').addEventListener('click', () => {
+  soundEnabled = !soundEnabled;
+  document.getElementById('sound-on-icon').classList.toggle('hidden', !soundEnabled);
+  document.getElementById('sound-off-icon').classList.toggle('hidden', soundEnabled);
 });
 
 socket.on('phase-change', (data) => {
@@ -797,6 +967,28 @@ socket.on('phase-change', (data) => {
 });
 
 socket.on('reveal-state', (data) => {
+  if (isSpectator) {
+    showScreen('spectator');
+    document.getElementById('spectator-title').textContent = `Reveal - Image ${data.currentImageIndex + 1}/${data.totalImages}`;
+    document.getElementById('spectator-subtitle').textContent = data.allRevealed ? 'All drawings revealed!' : 'Watch the drawings unfold';
+    document.getElementById('spectator-stage').classList.remove('hidden');
+    document.getElementById('spectator-ref-img').src = data.original;
+    document.getElementById('spectator-progress-text').textContent = `Image ${data.currentImageIndex + 1} of ${data.totalImages}`;
+
+    const container = document.getElementById('spectator-drawings');
+    container.innerHTML = '';
+    data.revealedDrawings.forEach((d) => {
+      const card = document.createElement('div');
+      card.className = 'spectator-drawing-card';
+      card.innerHTML = `
+        <h4>${escapeHtml(d.playerName)}</h4>
+        <img src="${d.data}" alt="${escapeHtml(d.playerName)}'s drawing">
+      `;
+      container.appendChild(card);
+    });
+    return;
+  }
+
   showScreen('reveal');
 
   const title = document.getElementById('reveal-title');
@@ -818,9 +1010,9 @@ socket.on('reveal-state', (data) => {
     const card = document.createElement('div');
     card.className = 'reveal-drawing-card';
     card.innerHTML = `
-      <h4>${d.playerName}</h4>
-      <img src="${d.data}" alt="${d.playerName}'s drawing">
-      ${d.strokes && d.strokes.length > 0 ? '<button class="btn btn-small timelapse-btn" data-player-id="' + d.playerId + '" data-stroke-count="' + d.strokes.length + '">Timelapse</button>' : ''}
+      <h4>${escapeHtml(d.playerName)}</h4>
+      <img src="${d.data}" alt="${escapeHtml(d.playerName)}'s drawing">
+      ${d.strokes && d.strokes.length > 0 ? '<button class="btn btn-small timelapse-btn" data-player-id="' + escapeHtml(d.playerId) + '" data-stroke-count="' + d.strokes.length + '">Timelapse</button>' : ''}
     `;
     drawingsContainer.appendChild(card);
   });
@@ -840,23 +1032,32 @@ socket.on('reveal-state', (data) => {
   playAgainBtn.classList.add('hidden');
 
   if (!data.allRevealed) {
-    nextBtn.classList.remove('hidden');
+    if (isHost) nextBtn.classList.remove('hidden');
   } else if (!data.isLastImage) {
-    nextImageBtn.classList.remove('hidden');
+    if (isHost) nextImageBtn.classList.remove('hidden');
   } else {
     if (isHost) {
       playAgainBtn.classList.remove('hidden');
     }
-    subtitle.textContent = 'All done!';
   }
 
   playReveal();
 });
 
 socket.on('reveal-complete', () => {
+  if (isSpectator) {
+    document.getElementById('spectator-title').textContent = 'All images revealed!';
+    document.getElementById('spectator-subtitle').textContent = 'Game complete!';
+    return;
+  }
+
   const subtitle = document.getElementById('reveal-subtitle');
+  const nextBtn = document.getElementById('reveal-next-btn');
+  const nextImageBtn = document.getElementById('reveal-next-image-btn');
   const playAgainBtn = document.getElementById('play-again-btn');
   subtitle.textContent = 'All images revealed!';
+  nextBtn.classList.add('hidden');
+  nextImageBtn.classList.add('hidden');
   if (isHost) {
     playAgainBtn.classList.remove('hidden');
   }
@@ -875,9 +1076,19 @@ document.getElementById('play-again-btn').addEventListener('click', () => {
 });
 
 socket.on('back-to-lobby', () => {
+  isSpectator = false;
   showScreen('lobby');
   document.getElementById('room-info').classList.remove('hidden');
   document.getElementById('room-code').textContent = roomCode;
+  document.getElementById('player-count-badge').classList.add('hidden');
+  document.getElementById('spectator-stage').classList.add('hidden');
+  document.getElementById('spectator-drawings').innerHTML = '';
+  document.getElementById('spectator-progress-text').textContent = '';
+  drawingSubmitted = false;
+  currentStrokes = [];
+  drawingHistory = [];
+  currentRound = 0;
+  totalRounds = 0;
   resetUpload();
 });
 
@@ -891,7 +1102,6 @@ const timelapseSpeedDisplay = document.getElementById('timelapse-speed-display')
 const timelapseCloseBtn = document.getElementById('timelapse-close-btn');
 let timelapseInterval = null;
 let timelapseStrokes = [];
-let timelapseIndex = 0;
 
 timelapseSpeed.addEventListener('input', () => {
   timelapseSpeedDisplay.textContent = timelapseSpeed.value + 'x';
@@ -922,7 +1132,6 @@ function showTimelapse(strokes, playerName) {
     x2: (s.x2 / 600) * 400,
     y2: (s.y2 / 500) * 400,
   }));
-  timelapseIndex = 0;
   document.getElementById('timelapse-title').textContent = `Timelapse - ${playerName}`;
   timelapseCtx.fillStyle = 'white';
   timelapseCtx.fillRect(0, 0, timelapseCanvas.width, timelapseCanvas.height);
@@ -950,8 +1159,20 @@ function playTimelapse() {
     timelapseCtx.lineCap = 'round';
     timelapseCtx.lineJoin = 'round';
     timelapseCtx.beginPath();
-    timelapseCtx.moveTo(stroke.x1, stroke.y1);
-    timelapseCtx.lineTo(stroke.x2, stroke.y2);
+
+    if (stroke.shape === 'line') {
+      timelapseCtx.moveTo(stroke.x1, stroke.y1);
+      timelapseCtx.lineTo(stroke.x2, stroke.y2);
+    } else if (stroke.shape === 'rect') {
+      timelapseCtx.rect(stroke.x1, stroke.y1, stroke.x2 - stroke.x1, stroke.y2 - stroke.y1);
+    } else if (stroke.shape === 'circle') {
+      const radius = Math.sqrt(Math.pow(stroke.x2 - stroke.x1, 2) + Math.pow(stroke.y2 - stroke.y1, 2));
+      timelapseCtx.arc(stroke.x1, stroke.y1, radius, 0, Math.PI * 2);
+    } else {
+      timelapseCtx.moveTo(stroke.x1, stroke.y1);
+      timelapseCtx.lineTo(stroke.x2, stroke.y2);
+    }
+
     timelapseCtx.stroke();
 
     strokeIndex++;

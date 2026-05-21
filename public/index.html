@@ -14,6 +14,18 @@
       <div id="player-count-badge" class="player-count-badge hidden">
         <span id="player-count">0</span> players
       </div>
+      <button id="sound-toggle-btn" class="sound-toggle-btn" title="Toggle Sound">
+        <svg id="sound-on-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+          <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+          <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+        </svg>
+        <svg id="sound-off-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="hidden">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+          <line x1="23" y1="9" x2="17" y2="15"/>
+          <line x1="17" y1="9" x2="23" y2="15"/>
+        </svg>
+      </button>
     </header>
 
     <main>
@@ -179,13 +191,25 @@
                   <input type="color" id="color-picker" value="#000000">
                   <div class="preset-colors">
                     <button class="color-btn" data-color="#000000" style="background:#000000"></button>
+                    <button class="color-btn" data-color="#ffffff" style="background:#ffffff"></button>
                     <button class="color-btn" data-color="#ff0000" style="background:#ff0000"></button>
-                    <button class="color-btn" data-color="#00ff00" style="background:#00ff00"></button>
-                    <button class="color-btn" data-color="#0000ff" style="background:#0000ff"></button>
+                    <button class="color-btn" data-color="#ff4500" style="background:#ff4500"></button>
+                    <button class="color-btn" data-color="#ff8c00" style="background:#ff8c00"></button>
+                    <button class="color-btn" data-color="#ffd700" style="background:#ffd700"></button>
                     <button class="color-btn" data-color="#ffff00" style="background:#ffff00"></button>
+                    <button class="color-btn" data-color="#00ff00" style="background:#00ff00"></button>
+                    <button class="color-btn" data-color="#008000" style="background:#008000"></button>
+                    <button class="color-btn" data-color="#0000ff" style="background:#0000ff"></button>
+                    <button class="color-btn" data-color="#000080" style="background:#000080"></button>
+                    <button class="color-btn" data-color="#800080" style="background:#800080"></button>
                     <button class="color-btn" data-color="#ff00ff" style="background:#ff00ff"></button>
                     <button class="color-btn" data-color="#00ffff" style="background:#00ffff"></button>
-                    <button class="color-btn" data-color="#ffffff" style="background:#ffffff"></button>
+                    <button class="color-btn" data-color="#808080" style="background:#808080"></button>
+                    <button class="color-btn" data-color="#a52a2a" style="background:#a52a2a"></button>
+                    <button class="color-btn" data-color="#deb887" style="background:#deb887"></button>
+                    <button class="color-btn" data-color="#ffc0cb" style="background:#ffc0cb"></button>
+                    <button class="color-btn" data-color="#8b4513" style="background:#8b4513"></button>
+                    <button class="color-btn" data-color="#4b0082" style="background:#4b0082"></button>
                   </div>
                 </div>
               </div>
@@ -230,6 +254,28 @@
         </div>
       </div>
 
+      <!-- SPECTATOR SCREEN -->
+      <div id="spectator-screen" class="screen">
+        <div class="spectator-container">
+          <div class="spectator-header">
+            <h2 id="spectator-title">Spectating</h2>
+            <p id="spectator-subtitle">Waiting for game state...</p>
+            <span id="spectator-player-count" class="spectator-badge">0 players</span>
+            <span id="spectator-count-badge" class="spectator-badge">0 watching</span>
+          </div>
+          <div id="spectator-stage" class="spectator-stage hidden">
+            <div class="spectator-reference">
+              <h3>Reference Image</h3>
+              <img id="spectator-ref-img" src="" alt="Reference">
+            </div>
+          </div>
+          <div id="spectator-drawings" class="spectator-drawings"></div>
+          <div class="spectator-progress">
+            <span id="spectator-progress-text"></span>
+          </div>
+        </div>
+      </div>
+
       <!-- REVEAL SCREEN -->
       <div id="reveal-screen" class="screen">
         <div class="reveal-container">
@@ -248,9 +294,9 @@
             <span id="reveal-progress-text">Image 1/4</span>
           </div>
           <div class="reveal-actions" id="reveal-actions">
-            <button id="reveal-next-btn" class="btn btn-primary hidden">Reveal Next</button>
-            <button id="reveal-next-image-btn" class="btn btn-secondary hidden">Next Image</button>
-            <button id="play-again-btn" class="btn btn-primary hidden">Play Again</button>
+            <button id="reveal-next-btn" class="btn btn-primary hidden host-only">Reveal Next</button>
+            <button id="reveal-next-image-btn" class="btn btn-secondary hidden host-only">Next Image</button>
+            <button id="play-again-btn" class="btn btn-primary hidden host-only">Play Again</button>
           </div>
         </div>
       </div>

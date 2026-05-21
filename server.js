@@ -19,9 +19,11 @@ function generateRoomCode() {
 
 function createRoom(hostId, hostName) {
   const code = generateRoomCode();
+  const sanitizedName = hostName.replace(/[<>"'&]/g, '').substring(0, 20) || 'Player';
   rooms.set(code, {
     code,
     players: new Map(),
+    spectators: new Map(),
     images: [],
     drawingsByImage: [],
     strokesByImage: [],
@@ -35,17 +37,22 @@ function createRoom(hostId, hostName) {
     revealImageIndex: 0,
     revealDrawingIndex: 0,
   });
-  rooms.get(code).players.set(hostId, { id: hostId, name: hostName, isHost: true });
+  rooms.get(code).players.set(hostId, { id: hostId, name: sanitizedName, isHost: true });
   return code;
 }
 
 function joinRoom(code, playerId, playerName) {
   const room = rooms.get(code);
   if (!room) return { success: false, error: 'Room not found' };
-  if (room.phase !== 'lobby') return { success: false, error: 'Game already started' };
-  if (room.players.size >= 8) return { success: false, error: 'Room is full' };
-  room.players.set(playerId, { id: playerId, name: playerName, isHost: false });
-  return { success: true, playerCount: room.players.size };
+  if (room.phase === 'lobby') {
+    if (room.players.size >= 8) return { success: false, error: 'Room is full' };
+    const sanitizedName = playerName.replace(/[<>"'&]/g, '').substring(0, 20) || 'Player';
+    room.players.set(playerId, { id: playerId, name: sanitizedName, isHost: false });
+    return { success: true, playerCount: room.players.size, isSpectator: false };
+  }
+  const sanitizedName = playerName.replace(/[<>"'&]/g, '').substring(0, 20) || 'Player';
+  room.spectators.set(playerId, { id: playerId, name: sanitizedName });
+  return { success: true, playerCount: room.players.size, isSpectator: true, phase: room.phase };
 }
 
 function leaveRoom(playerId) {
@@ -60,9 +67,13 @@ function leaveRoom(playerId) {
       if (player.isHost && room.players.size > 0) {
         const newHost = room.players.values().next().value;
         newHost.isHost = true;
-        return { newHostId: newHost.id };
+        return { newHostId: newHost.id, roomCode: code };
       }
-      return {};
+      return { roomCode: code };
+    }
+    if (room.spectators.has(playerId)) {
+      room.spectators.delete(playerId);
+      return { roomCode: code };
     }
   }
   return {};
@@ -82,10 +93,43 @@ io.on('connection', (socket) => {
     if (result.success) {
       socket.join(code);
       const room = rooms.get(code);
-      io.to(code).emit('players-update', Array.from(room.players.values()));
-      callback({ success: true, code });
+      io.to(code).emit('players-update', Array.from(room.players.values()), Array.from(room.spectators.values()));
+      if (result.isSpectator) {
+        callback({ success: true, code, isSpectator: true, phase: result.phase });
+      } else {
+        callback({ success: true, code, isSpectator: false });
+      }
     } else {
       callback(result);
+    }
+  });
+
+  socket.on('spectator-sync', (roomCode) => {
+    const room = rooms.get(roomCode);
+    if (!room) return;
+
+    if (room.phase === 'upload') {
+      socket.emit('spectator-phase', { phase: 'upload', imagesUploaded: room.images.length, totalPlayers: room.players.size });
+    } else if (room.phase === 'drawing') {
+      const players = Array.from(room.players.values());
+      const images = room.images;
+      const shift = room.currentRound + 1;
+      const playerIndex = players.findIndex((p) => p.id === socket.id);
+      if (playerIndex >= 0) return;
+
+      const currentImage = images[(shift - 1) % images.length];
+
+      socket.emit('spectator-phase', {
+        phase: 'drawing',
+        round: room.currentRound + 1,
+        totalRounds: room.players.size,
+        referenceImage: currentImage.data,
+        timeLeft: room.timeLeft,
+        submissionsCount: room.submissionsCount,
+        totalPlayers: room.players.size,
+      });
+    } else if (room.phase === 'reveal') {
+      sendRevealStateToSocket(roomCode, socket);
     }
   });
 
@@ -101,6 +145,7 @@ io.on('connection', (socket) => {
   socket.on('start-game', (roomCode) => {
     const room = rooms.get(roomCode);
     if (!room) return;
+    if (room.phase !== 'lobby') return;
     const host = room.players.get(socket.id);
     if (!host || !host.isHost) return;
 
@@ -117,6 +162,7 @@ io.on('connection', (socket) => {
       playerCount: room.players.size,
       roundDuration: room.roundDuration,
     });
+    io.to(roomCode).emit('players-update', Array.from(room.players.values()), Array.from(room.spectators.values()));
   });
 
   socket.on('upload-image', (roomCode, imageData) => {
@@ -143,7 +189,12 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomCode);
     if (!room) return;
 
-    if (room.currentRound >= room.totalRounds) {
+    if (room.players.size === 0) {
+      rooms.delete(roomCode);
+      return;
+    }
+
+    if (room.currentRound >= room.players.size) {
       room.phase = 'reveal';
       room.revealImageIndex = 0;
       room.revealDrawingIndex = 0;
@@ -197,6 +248,11 @@ io.on('connection', (socket) => {
     room.timer = setInterval(() => {
       room.timeLeft--;
       io.to(roomCode).emit('timer-update', room.timeLeft);
+      io.to(roomCode).emit('spectator-timer', {
+        timeLeft: room.timeLeft,
+        submissionsCount: room.submissionsCount,
+        totalPlayers: room.players.size,
+      });
 
       if (room.timeLeft <= 0) {
         clearInterval(room.timer);
@@ -210,6 +266,11 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomCode);
     if (!room || room.phase !== 'drawing') return;
 
+    const alreadySubmitted = room.drawingsByImage[imageIndex]?.some(
+      (d) => d.playerId === socket.id
+    );
+    if (alreadySubmitted) return;
+
     if (!room.drawingsByImage[imageIndex]) {
       room.drawingsByImage[imageIndex] = [];
     }
@@ -217,26 +278,27 @@ io.on('connection', (socket) => {
       room.strokesByImage[imageIndex] = [];
     }
 
-    const existingIdx = room.drawingsByImage[imageIndex].findIndex(
-      (d) => d.playerId === socket.id
-    );
-    if (existingIdx >= 0) {
-      room.drawingsByImage[imageIndex][existingIdx].data = drawingData;
-      room.strokesByImage[imageIndex][existingIdx].strokes = strokes || [];
-    } else {
-      room.drawingsByImage[imageIndex].push({
-        playerId: socket.id,
-        data: drawingData,
-      });
-      room.strokesByImage[imageIndex].push({
-        playerId: socket.id,
-        strokes: strokes || [],
-      });
-    }
+    room.drawingsByImage[imageIndex].push({
+      playerId: socket.id,
+      data: drawingData,
+    });
+    room.strokesByImage[imageIndex].push({
+      playerId: socket.id,
+      strokes: strokes || [],
+    });
 
     room.submissionsCount++;
     io.to(roomCode).emit('drawing-submitted', {
       playerId: socket.id,
+      submissionsCount: room.submissionsCount,
+      totalPlayers: room.players.size,
+    });
+
+    const submittingPlayer = room.players.get(socket.id);
+    io.to(roomCode).emit('spectator-drawing', {
+      playerId: socket.id,
+      playerName: submittingPlayer ? submittingPlayer.name : 'Unknown',
+      drawing: drawingData,
       submissionsCount: room.submissionsCount,
       totalPlayers: room.players.size,
     });
@@ -294,6 +356,36 @@ io.on('connection', (socket) => {
     callback(revealData);
   });
 
+  function sendRevealStateToSocket(roomCode, targetSocket) {
+    const room = rooms.get(roomCode);
+    if (!room) return;
+
+    const currentImage = room.images[room.revealImageIndex];
+    const originalPlayer = room.players.get(currentImage.playerId);
+    const imageDrawings = room.drawingsByImage[room.revealImageIndex] || [];
+    const imageStrokes = room.strokesByImage[room.revealImageIndex] || [];
+    const revealedDrawings = imageDrawings.slice(0, room.revealDrawingIndex);
+    const revealedStrokes = imageStrokes.slice(0, room.revealDrawingIndex);
+    const totalDrawings = imageDrawings.length;
+
+    targetSocket.emit('phase-change', { phase: 'reveal' });
+    targetSocket.emit('reveal-state', {
+      currentImageIndex: room.revealImageIndex,
+      totalImages: room.images.length,
+      original: currentImage.data,
+      originalPlayer: originalPlayer ? originalPlayer.name : 'Unknown',
+      revealedDrawings: revealedDrawings.map((d, idx) => ({
+        playerId: d.playerId,
+        playerName: room.players.get(d.playerId)?.name || 'Unknown',
+        data: d.data,
+        strokes: revealedStrokes[idx]?.strokes || [],
+      })),
+      totalDrawings,
+      allRevealed: room.revealDrawingIndex >= totalDrawings,
+      isLastImage: room.revealImageIndex >= room.images.length - 1,
+    });
+  }
+
   function sendRevealState(roomCode) {
     const room = rooms.get(roomCode);
     if (!room) return;
@@ -330,7 +422,16 @@ io.on('connection', (socket) => {
     const host = room.players.get(socket.id);
     if (!host || !host.isHost) return;
 
+    const imageDrawings = room.drawingsByImage[room.revealImageIndex] || [];
+    if (room.revealDrawingIndex >= imageDrawings.length) return;
+
     room.revealDrawingIndex++;
+    sendRevealState(roomCode);
+  });
+
+  socket.on('request-reveal-state', (roomCode) => {
+    const room = rooms.get(roomCode);
+    if (!room || room.phase !== 'reveal') return;
     sendRevealState(roomCode);
   });
 
@@ -372,13 +473,34 @@ io.on('connection', (socket) => {
     const result = leaveRoom(socket.id);
     if (result.roomDeleted) return;
 
-    for (const [code, room] of rooms) {
-      if (room.players.size > 0) {
-        io.to(code).emit('players-update', Array.from(room.players.values()));
-        if (result.newHostId) {
-          io.to(code).emit('host-changed', result.newHostId);
+    const roomCode = result.roomCode;
+    if (!roomCode) return;
+    const room = rooms.get(roomCode);
+    if (!room) return;
+
+    if (room.phase === 'drawing') {
+      const alreadySubmitted = room.drawingsByImage.some((drawings) =>
+        drawings && drawings.some((d) => d.playerId === socket.id)
+      );
+      if (!alreadySubmitted) {
+        room.totalRounds = room.players.size;
+        room.submissionsCount++;
+        io.to(roomCode).emit('drawing-submitted', {
+          playerId: socket.id,
+          submissionsCount: room.submissionsCount,
+          totalPlayers: room.players.size,
+        });
+        if (room.submissionsCount >= room.players.size) {
+          if (room.timer) clearInterval(room.timer);
+          room.currentRound++;
+          startDrawingRound(roomCode);
         }
       }
+    }
+
+    io.to(roomCode).emit('players-update', Array.from(room.players.values()), Array.from(room.spectators.values()));
+    if (result.newHostId) {
+      io.to(roomCode).emit('host-changed', result.newHostId);
     }
   });
 });
