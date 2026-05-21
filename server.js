@@ -134,6 +134,7 @@ io.on('connection', (socket) => {
       room.phase = 'reveal';
       room.revealImageIndex = 0;
       room.revealDrawingIndex = 0;
+      io.to(roomCode).emit('round-ended');
       sendRevealState(roomCode);
       return;
     }
@@ -199,7 +200,7 @@ io.on('connection', (socket) => {
     }
 
     room.submissionsCount++;
-    socket.emit('drawing-submitted');
+    io.to(roomCode).emit('drawing-submitted', { playerId: socket.id });
 
     if (room.submissionsCount >= room.players.size) {
       if (room.timer) clearInterval(room.timer);
@@ -255,6 +256,7 @@ io.on('connection', (socket) => {
     const revealedDrawings = roundDrawings.slice(0, room.revealDrawingIndex);
     const totalDrawings = roundDrawings.length;
 
+    io.to(roomCode).emit('phase-change', { phase: 'reveal' });
     io.to(roomCode).emit('reveal-state', {
       currentImageIndex: room.revealImageIndex,
       totalImages: room.images.length,

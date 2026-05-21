@@ -339,11 +339,17 @@ socket.on('timer-update', (timeLeft) => {
   }
 });
 
-socket.on('drawing-submitted', () => {
-  drawingSubmitted = true;
-  document.getElementById('submit-drawing-btn').classList.add('hidden');
+socket.on('drawing-submitted', (data) => {
+  if (data.playerId === socket.id) {
+    drawingSubmitted = true;
+    document.getElementById('submit-drawing-btn').classList.add('hidden');
+  }
   showScreen('waiting');
-  document.getElementById('waiting-message').textContent = 'Drawing submitted! Waiting for others...';
+  document.getElementById('waiting-message').textContent = 'Waiting for others...';
+});
+
+socket.on('round-ended', () => {
+  document.getElementById('waiting-message').textContent = 'Round complete!';
 });
 
 let lastX = 0;
@@ -585,6 +591,8 @@ socket.on('phase-change', (data) => {
 });
 
 socket.on('reveal-state', (data) => {
+  showScreen('reveal');
+
   const title = document.getElementById('reveal-title');
   const subtitle = document.getElementById('reveal-subtitle');
   const originalImg = document.getElementById('reveal-original-img');
